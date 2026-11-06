@@ -15,11 +15,21 @@ var (
 	version = "dev"
 	commit  = ""
 	date    = ""
+
+	// updateRepo is the GitHub repo (owner/name) self-update installs
+	// releases from. Forks can set their own with -ldflags.
+	updateRepo = "plombardi89/maisys2"
 )
 
 // Version returns the release version, or "dev" for builds that aren't releases.
 func Version() string {
 	return version
+}
+
+// UpdateRepo returns the GitHub repo (owner/name) that self-update installs
+// releases from.
+func UpdateRepo() string {
+	return updateRepo
 }
 
 // IsDev reports whether this is a development build rather than a release.
