@@ -23,9 +23,15 @@ import (
 
 const version = "1.2.3"
 
-// fakeMaisys stands in for the real binary and records the arguments it was
-// run with.
-const fakeMaisys = "#!/bin/sh\nprintf '%s\\n' \"$*\" >\"$FAKE_MAISYS_LOG\"\n"
+// fakeMaisys stands in for the real binary built for arch, and records the
+// arguments it was run with.
+func fakeMaisys(arch string) string {
+	return "#!/bin/sh\n# linux_" + arch + "\nprintf '%s\\n' \"$*\" >\"$FAKE_MAISYS_LOG\"\n"
+}
+
+func archiveName(arch string) string {
+	return fmt.Sprintf("maisys_%s_linux_%s.tar.gz", version, arch)
+}
 
 // baseTools are the commands install.sh needs besides curl or wget. Tests run
 // it with only these on PATH, so a new dependency fails the tests.
@@ -39,6 +45,7 @@ type harness struct {
 	home    string
 	release string // directory served as the release
 	url     string
+	tools   string // directory of the commands on PATH
 	path    string // PATH the script runs with
 	log     string // where the fake maisys records its arguments
 	env     []string
@@ -61,7 +68,8 @@ func newHarness(t *testing.T, downloader string) *harness {
 	if downloader != "" {
 		tools = append(append([]string(nil), baseTools...), downloader)
 	}
-	h.path = toolDir(t, tools...)
+	h.tools = toolDir(t, tools...)
+	h.path = h.tools
 
 	srv := httptest.NewServer(http.FileServer(http.Dir(h.release)))
 	t.Cleanup(srv.Close)
@@ -71,34 +79,49 @@ func newHarness(t *testing.T, downloader string) *harness {
 	return h
 }
 
-// writeRelease writes a release with a Linux archive containing the fake
-// maisys, plus checksums.txt. overrides replaces checksum lines by file name;
-// an empty value drops the line.
+// writeRelease writes a release with an amd64 and an arm64 Linux archive, each
+// containing the fake maisys for that architecture, plus checksums.txt.
+// overrides replaces checksum lines by file name; an empty value drops the
+// line.
 func (h *harness) writeRelease(overrides map[string]string) {
 	h.t.Helper()
-	archive := fmt.Sprintf("maisys_%s_linux_amd64.tar.gz", version)
-	data := tarGz(h.t, map[string]tarFile{
-		"LICENSE": {mode: 0o644, body: "MIT"},
-		"maisys":  {mode: 0o755, body: fakeMaisys},
-	})
-	writeFile(h.t, filepath.Join(h.release, archive), data, 0o644)
-
-	sum := sha256.Sum256(data)
+	windows := fmt.Sprintf("maisys_%s_windows_amd64.zip", version)
+	names := []string{"install.sh", archiveName("amd64"), archiveName("arm64"), windows}
 	lines := map[string]string{
 		"install.sh": strings.Repeat("1", 64),
-		archive:      hex.EncodeToString(sum[:]),
-		fmt.Sprintf("maisys_%s_windows_amd64.zip", version): strings.Repeat("2", 64),
+		windows:      strings.Repeat("2", 64),
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		data := tarGz(h.t, map[string]tarFile{
+			"LICENSE": {mode: 0o644, body: "MIT"},
+			"maisys":  {mode: 0o755, body: fakeMaisys(arch)},
+		})
+		writeFile(h.t, filepath.Join(h.release, archiveName(arch)), data, 0o644)
+		sum := sha256.Sum256(data)
+		lines[archiveName(arch)] = hex.EncodeToString(sum[:])
 	}
 	for name, s := range overrides {
 		lines[name] = s
 	}
 	var b strings.Builder
-	for _, name := range []string{"install.sh", archive, fmt.Sprintf("maisys_%s_windows_amd64.zip", version)} {
+	for _, name := range names {
 		if s := lines[name]; s != "" {
 			fmt.Fprintf(&b, "%s  %s\n", s, name)
 		}
 	}
 	writeFile(h.t, filepath.Join(h.release, "checksums.txt"), []byte(b.String()), 0o644)
+}
+
+// fakeUname replaces uname on the script's PATH with one that reports Linux
+// on the given machine architecture (uname -m).
+func (h *harness) fakeUname(machine string) {
+	h.t.Helper()
+	p := filepath.Join(h.tools, "uname")
+	if err := os.Remove(p); err != nil {
+		h.t.Fatal(err)
+	}
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = -m ]; then echo %s; else echo Linux; fi\n", machine)
+	writeFile(h.t, p, []byte(script), 0o755)
 }
 
 func (h *harness) binPath() string {
@@ -145,18 +168,19 @@ func (h *harness) run(args ...string) (stdout, stderr string, code int) {
 func TestInstall(t *testing.T) {
 	for _, downloader := range []string{"curl", "wget"} {
 		t.Run(downloader, func(t *testing.T) {
-			skipIfRoot(t)
+			skipUnlessInstallable(t)
 			h := newHarness(t, downloader)
 
 			_, stderr, code := h.run()
 			if code != 0 {
 				t.Fatalf("exit code = %d, stderr:\n%s", code, stderr)
 			}
-			assertFile(t, h.binPath(), fakeMaisys, 0o755)
+			assertFile(t, h.binPath(), fakeMaisys(runtime.GOARCH), 0o755)
 			assertContains(t, stderr,
 				"installed maisys "+version+" to "+h.binPath(),
 				"isn't on your PATH yet",
-				"next: run 'maisys sync CONFIG-URL'",
+				"next: run '"+h.binPath()+" sync CONFIG-URL'",
+				"or '"+h.binPath()+" config init'",
 			)
 			assertNotExist(t, h.log)
 		})
@@ -164,7 +188,7 @@ func TestInstall(t *testing.T) {
 }
 
 func TestInstallRunsSync(t *testing.T) {
-	skipIfRoot(t)
+	skipUnlessInstallable(t)
 	h := newHarness(t, "curl")
 
 	_, stderr, code := h.run("https://example.com/config.git", "--machine", "laptop")
@@ -181,7 +205,7 @@ func TestInstallRunsSync(t *testing.T) {
 }
 
 func TestInstallReplacesExistingBinary(t *testing.T) {
-	skipIfRoot(t)
+	skipUnlessInstallable(t)
 	h := newHarness(t, "curl")
 	writeFile(t, h.binPath(), []byte("old"), 0o755)
 	h.path += ":" + filepath.Dir(h.binPath())
@@ -190,15 +214,41 @@ func TestInstallReplacesExistingBinary(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr:\n%s", code, stderr)
 	}
-	assertFile(t, h.binPath(), fakeMaisys, 0o755)
+	assertFile(t, h.binPath(), fakeMaisys(runtime.GOARCH), 0o755)
 	assertNotExist(t, filepath.Join(filepath.Dir(h.binPath()), ".maisys.new"))
 	if strings.Contains(stderr, "isn't on your PATH") {
 		t.Errorf("warned about PATH although %s is on it:\n%s", filepath.Dir(h.binPath()), stderr)
 	}
+	assertContains(t, stderr, "next: run 'maisys sync CONFIG-URL'")
+}
+
+// TestInstallArchitectures checks that install.sh picks the archive for the
+// machine's architecture, whatever the tests run on.
+func TestInstallArchitectures(t *testing.T) {
+	tests := []struct {
+		machine string // what uname -m reports
+		arch    string // the archive install.sh should install
+	}{
+		{"x86_64", "amd64"},
+		{"aarch64", "arm64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.machine, func(t *testing.T) {
+			skipUnlessInstallable(t)
+			h := newHarness(t, "curl")
+			h.fakeUname(tt.machine)
+
+			_, stderr, code := h.run()
+			if code != 0 {
+				t.Fatalf("exit code = %d, stderr:\n%s", code, stderr)
+			}
+			assertFile(t, h.binPath(), fakeMaisys(tt.arch), 0o755)
+		})
+	}
 }
 
 func TestInstallFailures(t *testing.T) {
-	archive := fmt.Sprintf("maisys_%s_linux_amd64.tar.gz", version)
+	archive := archiveName(runtime.GOARCH)
 	tests := []struct {
 		name       string
 		downloader string
@@ -215,7 +265,13 @@ func TestInstallFailures(t *testing.T) {
 			name:       "no Linux archive",
 			downloader: "curl",
 			setup:      func(h *harness) { h.writeRelease(map[string]string{archive: ""}) },
-			want:       "the release has no linux_amd64 archive",
+			want:       "the release has no linux_" + runtime.GOARCH + " archive",
+		},
+		{
+			name:       "unsupported architecture",
+			downloader: "curl",
+			setup:      func(h *harness) { h.fakeUname("riscv64") },
+			want:       "unsupported architecture: riscv64",
 		},
 		{
 			name:       "no release",
@@ -231,7 +287,7 @@ func TestInstallFailures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skipIfRoot(t)
+			skipUnlessInstallable(t)
 			h := newHarness(t, tt.downloader)
 			if tt.setup != nil {
 				tt.setup(h)
@@ -321,6 +377,23 @@ func TestUninstallRemovesEmptyConfigDir(t *testing.T) {
 	assertNotExist(t, filepath.Dir(settings))
 }
 
+func TestUninstallRemovesBrokenSymlink(t *testing.T) {
+	h := newHarness(t, "")
+	if err := os.MkdirAll(filepath.Dir(h.binPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(h.home, "deleted-build", "maisys"), h.binPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, code := h.run("--uninstall")
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, stderr)
+	}
+	assertNotExist(t, h.binPath())
+	assertContains(t, stderr, "removed "+h.binPath())
+}
+
 func TestUninstallNothingInstalled(t *testing.T) {
 	h := newHarness(t, "")
 	_, stderr, code := h.run("--uninstall")
@@ -402,10 +475,16 @@ func scriptPath(t *testing.T) string {
 	return p
 }
 
-func skipIfRoot(t *testing.T) {
+// skipUnlessInstallable skips tests that expect install.sh to install
+// maisys, where it would refuse to: as root (see TestRefusesRoot), or on an
+// architecture it doesn't support.
+func skipUnlessInstallable(t *testing.T) {
 	t.Helper()
 	if os.Geteuid() == 0 {
 		t.Skip("install.sh refuses to run as root (see TestRefusesRoot)")
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("install.sh doesn't support %s", runtime.GOARCH)
 	}
 }
 

@@ -7,7 +7,7 @@ maisys sets up and maintains development machines from a config repo that you ke
 
 ## Installing
 
-On Linux, once the first release is published:
+On Linux (amd64 or arm64), once the first release is published:
 
 ```sh
 curl -fsSL https://github.com/plombardi89/maisys2/releases/latest/download/install.sh | bash -s -- CONFIG-URL
