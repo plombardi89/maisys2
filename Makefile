@@ -22,8 +22,9 @@ build: ## Build bin/maisys
 test: ## Run the unit tests
 	go test ./...
 
-lint: ## Run golangci-lint
+lint: ## Run golangci-lint, and shellcheck if it's installed
 	$(GOLANGCI_LINT) run
+	@if command -v shellcheck >/dev/null; then shellcheck install.sh; else echo "shellcheck not installed; skipping (CI runs it)"; fi
 
 fmt: ## Format the code
 	$(GOLANGCI_LINT) fmt
