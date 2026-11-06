@@ -19,7 +19,7 @@ New packages go under `internal/`, following the layout in issue #1.
 - `make lint` runs golangci-lint through `go run`, so it doesn't depend on a locally installed copy.
 - Keep `go.mod` tidy (`make tidy`). CI fails if `go mod tidy` would change anything.
 - Tests use the standard `testing` package and are table-driven where it helps.
-- CI runs tests on Linux and Windows, so code must build and pass on both.
+- CI runs the tests on Ubuntu 24.04 and 26.04, Fedora 43, 44 and 45 (in containers), and Windows, so code must build and pass on all of them. The list follows the rolling support policy in issue #1: when a release reaches end of life or a new one ships, update the matrix in `ci.yml` and the required checks in the `main` ruleset together.
 - `make snapshot` builds the release archives into `dist/` without publishing anything. CI does the same on every pull request.
 
 ## Releases
@@ -30,7 +30,7 @@ Pushing a `v*` tag runs `release.yml`: CI, then GoReleaser creates a **draft** r
 
 - Commands that exist but don't work yet return the `notImplemented` error, so the command line keeps the shape described in issue #1.
 - Exit codes: 0 success, 1 error, 2 changes pending (`sync --dry-run`), 3 reboot needed (Windows).
-- Changes land through pull requests, and CI must pass before merging.
+- Changes land through pull requests, and CI must pass before merging. Pull requests are squash-merged, must be up to date with `main`, and their branches are deleted after merging.
 
 ## Boundaries
 
