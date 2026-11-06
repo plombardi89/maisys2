@@ -13,6 +13,11 @@ builds:
       - windows
     goarch:
       - amd64
+      - arm64
+    ignore:
+      # Windows is amd64 only (see #1).
+      - goos: windows
+        goarch: arm64
     flags:
       - -trimpath
     ldflags:

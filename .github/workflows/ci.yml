@@ -26,7 +26,10 @@ jobs:
           version: v2.15.0
       - name: Check shell scripts
         run: |
-          command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
           shellcheck install.sh
 
   test:
@@ -34,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-26.04, windows-latest]
+        os: [ubuntu-24.04, ubuntu-26.04, ubuntu-26.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -93,3 +96,9 @@ jobs:
         with:
           version: "~> v2"
           args: release --snapshot --clean
+      # The install tests use a fake release, so check that install.sh also
+      # works with the archives and checksums GoReleaser really produces.
+      - name: Install the snapshot with install.sh
+        run: |
+          MAISYS_RELEASE_URL="file://$PWD/dist" bash -s -- <install.sh
+          ~/.local/bin/maisys --version

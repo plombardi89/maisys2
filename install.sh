@@ -66,12 +66,13 @@ platform() {
 	[ "$os" = Linux ] || die "unsupported operating system: $os (on Windows, use install.ps1)"
 	case "$arch" in
 	x86_64 | amd64) echo linux_amd64 ;;
+	aarch64 | arm64) echo linux_arm64 ;;
 	*) die "unsupported architecture: $arch" ;;
 	esac
 }
 
 install_maisys() {
-	local target tmp sum name asset="" want="" version got
+	local target tmp sum name asset="" want="" version got cmd
 	[ "$(id -u)" -ne 0 ] || die "run this as your normal user, not root; maisys uses sudo when it needs to"
 	target=$(platform)
 
@@ -108,13 +109,19 @@ install_maisys() {
 	mv -f "$bin_dir/.maisys.new" "$bin_dir/maisys"
 	say "installed maisys $version to $bin_dir/maisys"
 
+	# Until bin_dir is on PATH, the next steps need the full path to work in
+	# this shell.
+	cmd=maisys
 	case ":$PATH:" in
 	*":$bin_dir:"*) ;;
-	*) say "note: $bin_dir isn't on your PATH yet; maisys adds it when it sets up your shell" ;;
+	*)
+		cmd="$bin_dir/maisys"
+		say "note: $bin_dir isn't on your PATH yet; add it yourself, or enable a shell in your maisys config to have maisys add it"
+		;;
 	esac
 
 	if [ $# -eq 0 ]; then
-		say "next: run 'maisys sync CONFIG-URL' to set up this machine, or 'maisys config init' to start a new config repo"
+		say "next: run '$cmd sync CONFIG-URL' to set up this machine, or '$cmd config init' to start a new config repo"
 		return
 	fi
 
@@ -131,7 +138,8 @@ install_maisys() {
 uninstall_maisys() {
 	local path removed=0
 	for path in "$bin_dir/maisys" "$config_dir/maisys.toml" "$config_dir/git-credentials" "$state_dir" "$cache_dir"; do
-		if [ -e "$path" ]; then
+		# -L too, so a symlink to a binary that no longer exists is removed.
+		if [ -e "$path" ] || [ -L "$path" ]; then
 			rm -rf "$path"
 			say "removed $path"
 			removed=1
