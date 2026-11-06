@@ -333,6 +333,58 @@ version = 1.20
 			want:    []string{"machines/box.toml:1:"},
 		},
 		{
+			name:    "a module set to a plain value",
+			machine: "box",
+			files:   fstest.MapFS{"machines/box.toml": file(`golang = "1.27"`)},
+			want:    []string{"golang must be a table, not a TOML string"},
+		},
+		{
+			name:    "keys in the wrong case, which go-toml would accept and merging would drop",
+			machine: "box",
+			files: fstest.MapFS{"machines/box.toml": file(`
+OS = "fedora"
+
+[golang]
+Enabled = true
+Version = "1.27"
+
+[Files]
+enabled = true
+`)},
+			want: []string{
+				"machines/box.toml:1:1: unknown key OS (keys are case-sensitive: did you mean os?)",
+				"machines/box.toml:4:1: unknown key golang.Enabled (keys are case-sensitive: did you mean golang.enabled?)",
+				"machines/box.toml:5:1: unknown key golang.Version (keys are case-sensitive: did you mean golang.version?)",
+				"machines/box.toml:7:2: unknown key Files (keys are case-sensitive: did you mean files?)",
+			},
+		},
+		{
+			name:    "the wrong case in dotted keys and inline tables",
+			machine: "box",
+			files: fstest.MapFS{"machines/box.toml": file(`
+golang.Version = "1.27"
+files = { Enabled = true }
+`)},
+			want: []string{
+				"machines/box.toml:1:8: unknown key golang.Version (keys are case-sensitive: did you mean golang.version?)",
+				"machines/box.toml:2:11: unknown key files.Enabled (keys are case-sensitive: did you mean files.enabled?)",
+			},
+		},
+		{
+			name:    "the wrong case in a table keyed by name, in a profile",
+			machine: "box",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`profiles = ["base"]`),
+				"profiles/base.toml": file(`
+[files.items.nvim]
+Source = "files/nvim/"
+`),
+			},
+			want: []string{
+				"profiles/base.toml:2:1: unknown key files.items.nvim.Source (keys are case-sensitive: did you mean files.items.nvim.source?)",
+			},
+		},
+		{
 			name:    "problems in several profiles are all reported",
 			machine: "box",
 			files: fstest.MapFS{
@@ -363,9 +415,14 @@ version = 1.20
 }
 
 func TestUnknownKeyErrorsAreMarked(t *testing.T) {
-	_, err := load(t, fstest.MapFS{"machines/box.toml": file("[golang]\nversions = \"1\"\n")}, "box")
-	if !errors.Is(err, config.ErrUnknownKey) {
-		t.Errorf("errors.Is(err, ErrUnknownKey) = false for %v", err)
+	for _, doc := range []string{
+		"[golang]\nversions = \"1\"\n", // unknown to go-toml
+		"[golang]\nVersion = \"1\"\n",  // only differs in case
+	} {
+		_, err := load(t, fstest.MapFS{"machines/box.toml": file(doc)}, "box")
+		if !errors.Is(err, config.ErrUnknownKey) {
+			t.Errorf("errors.Is(err, ErrUnknownKey) = false for %v", err)
+		}
 	}
 }
 

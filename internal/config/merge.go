@@ -31,9 +31,6 @@ func (m *merger) mergeStruct(dst, src reflect.Value, present map[string]any, pre
 			m.mergeStruct(dst.Field(i), src.Field(i), present, prefix)
 			continue
 		}
-		if name == "" {
-			name = f.Name
-		}
 		value, ok := present[name]
 		if !ok {
 			continue
@@ -88,6 +85,7 @@ func (m *merger) mergeMap(dst, src reflect.Value, present map[string]any, path s
 			entry.Set(cur)
 		} else if d, ok := reflect.TypeAssert[Defaulter](entry.Addr()); ok {
 			d.SetDefaults()
+			entry.Set(deepCopy(entry))
 		}
 		sub, _ := present[key.String()].(map[string]any)
 		m.mergeStruct(entry, srcEntry, sub, entryPath)
@@ -116,6 +114,45 @@ func containsValue(list, item reflect.Value) bool {
 		}
 	}
 	return false
+}
+
+// deepCopy returns a copy of v that shares no maps or slices with it. Config
+// types hold only the kinds checkStruct allows, so there are no pointers to
+// follow.
+func deepCopy(v reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Struct:
+		c := reflect.New(v.Type()).Elem()
+		c.Set(v)
+		for i := range v.NumField() {
+			if c.Field(i).CanSet() {
+				c.Field(i).Set(deepCopy(v.Field(i)))
+			}
+		}
+		return c
+	case reflect.Map:
+		if v.IsNil() {
+			return v
+		}
+		c := reflect.MakeMapWithSize(v.Type(), v.Len())
+		for it := v.MapRange(); it.Next(); {
+			c.SetMapIndex(it.Key(), deepCopy(it.Value()))
+		}
+		return c
+	case reflect.Slice:
+		if v.IsNil() {
+			return v
+		}
+		// Exactly as long as v, so appending to the copy never writes into
+		// spare capacity v's backing array has.
+		c := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		for i := range v.Len() {
+			c.Index(i).Set(deepCopy(v.Index(i)))
+		}
+		return c
+	default:
+		return v
+	}
 }
 
 // tomlName returns the key name from a field's toml tag.
