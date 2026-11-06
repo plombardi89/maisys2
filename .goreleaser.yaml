@@ -25,6 +25,9 @@ builds:
       - -X github.com/plombardi89/maisys2/internal/buildinfo.version={{ .Version }}
       - -X github.com/plombardi89/maisys2/internal/buildinfo.commit={{ .ShortCommit }}
       - -X github.com/plombardi89/maisys2/internal/buildinfo.date={{ .Date }}
+      # Self-update installs releases from the repo that built this one, so a
+      # fork's release workflow builds binaries that update from the fork.
+      - -X github.com/plombardi89/maisys2/internal/buildinfo.updateRepo={{ envOrDefault "GITHUB_REPOSITORY" "plombardi89/maisys2" }}
 
 archives:
   - id: maisys

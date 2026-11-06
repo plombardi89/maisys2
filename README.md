@@ -17,6 +17,10 @@ This installs `maisys` to `~/.local/bin` and runs `maisys sync CONFIG-URL`. Leav
 
 To remove maisys itself (the binary, settings, state and caches), run the same command with `--uninstall` in place of `CONFIG-URL`. Tools, files and packages that maisys installed are left in place.
 
+## Updating
+
+maisys keeps itself up to date. Every `maisys sync` first checks for a newer release, and if there is one, installs it and carries on with the new version. It never moves to an older release. `maisys sync --local` skips the check, and if the check fails (for example, with no network), maisys warns and carries on with the version you have.
+
 ## Building
 
 You need Go 1.27 or newer.

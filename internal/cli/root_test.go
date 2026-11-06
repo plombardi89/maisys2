@@ -87,6 +87,27 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
+func TestSyncSelfUpdateStep(t *testing.T) {
+	// Tests run as a development build, which never checks for updates, so
+	// these don't touch the network.
+	const devMsg = "not checking for a newer maisys: this is a development build"
+
+	_, _, stderr := run(t, nil, "sync", "-v")
+	if !strings.Contains(stderr, devMsg) {
+		t.Errorf("sync -v: stderr = %q, want it to contain %q", stderr, devMsg)
+	}
+
+	_, _, stderr = run(t, nil, "sync", "-v", "--local")
+	if strings.Contains(stderr, devMsg) {
+		t.Errorf("sync -v --local: stderr = %q, want no self-update step", stderr)
+	}
+
+	_, _, stderr = run(t, nil, "sync")
+	if strings.Contains(stderr, devMsg) {
+		t.Errorf("sync without -v: stderr = %q, want the message only with --verbose", stderr)
+	}
+}
+
 func TestNoColor(t *testing.T) {
 	tests := []struct {
 		value string
@@ -97,7 +118,7 @@ func TestNoColor(t *testing.T) {
 		{"0", false}, // any non-empty value turns colour off
 	}
 	for _, tt := range tests {
-		g := newGlobalOptions(func(string) string { return tt.value })
+		g := newGlobalOptions(nil, func(string) string { return tt.value })
 		if g.color != tt.color {
 			t.Errorf("NO_COLOR=%q: color = %v, want %v", tt.value, g.color, tt.color)
 		}

@@ -11,7 +11,7 @@ type syncOptions struct {
 	local   bool
 }
 
-func newSyncCommand(_ *globalOptions) *cobra.Command {
+func newSyncCommand(g *globalOptions) *cobra.Command {
 	var opts syncOptions
 	cmd := &cobra.Command{
 		Use:   "sync [CONFIG-URL]",
@@ -23,7 +23,14 @@ The first run clones CONFIG-URL (or uses the clone given with --dir), picks the
 machine file for this machine and saves both choices. Later runs need no
 arguments.`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !opts.local {
+				if err := updateSelf(cmd, g); err != nil {
+					return err
+				}
+			}
+			return notImplemented(cmd, args)
+		},
 	}
 
 	f := cmd.Flags()

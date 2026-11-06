@@ -5,8 +5,9 @@ maisys is a Go binary that sets up and maintains development machines (Fedora, U
 ## Repository structure
 
 - `cmd/maisys/` - the `maisys` entry point.
-- `internal/buildinfo/` - version information set at build time with `-ldflags`.
+- `internal/buildinfo/` - version information set at build time with `-ldflags`, including the repo self-update installs from (`updateRepo`). Release builds set it from `GITHUB_REPOSITORY`, so a fork's releases update from the fork; a fork also needs to change the default URL in `install.sh`.
 - `internal/cli/` - the cobra command tree (`sync`, `config`, `status`).
+- `internal/selfupdate/` - checks the latest release's `checksums.txt` and replaces the running binary if that release is newer (the first step of `sync`). `MAISYS_RELEASE_URL` points it, and `install.sh`, at other release files (http, https or file) for testing.
 - `.github/workflows/` - CI (`ci.yml`) and releases (`release.yml`).
 - `.goreleaser.yaml` - how release archives and checksums are built.
 - `install.sh` - the Linux installer and uninstaller, published with each release. It must stay a single self-contained bash script.
@@ -18,7 +19,7 @@ New packages go under `internal/`, following the layout in issue #1.
 
 - `make build`, `make test`, `make lint` and `make fmt`. Run `make help` for the full list.
 - Go version: see `go.mod`. If your installed Go is older, `go` downloads the right version automatically.
-- `make lint` runs golangci-lint through `go run`, so it doesn't depend on a locally installed copy.
+- `make lint` installs a pinned golangci-lint into `bin/` and lints both the Linux and the Windows build (`GOOS=windows`), so it doesn't depend on a locally installed copy and catches problems in Windows-only files.
 - Keep `go.mod` tidy (`make tidy`). CI fails if `go mod tidy` would change anything.
 - Tests use the standard `testing` package and are table-driven where it helps.
 - CI runs the tests on Ubuntu 24.04 and 26.04, Ubuntu 26.04 on arm64, Fedora 43, 44 and 45 (in containers), and Windows, so code must build and pass on all of them. The list follows the rolling support policy in issue #1, and the arm64 entry follows the newest Ubuntu LTS: when a release reaches end of life or a new one ships, update the matrix in `ci.yml` and the required checks in the `main` ruleset together.

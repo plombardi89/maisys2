@@ -24,6 +24,14 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
+      # Files built only for Windows (named *_windows.go) aren't part of the
+      # Linux build, so lint the Windows build too.
+      - name: Lint the Windows build
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: windows
+        with:
+          version: v2.15.0
       - name: Check shell scripts
         run: |
           if ! command -v shellcheck >/dev/null; then
@@ -102,3 +110,19 @@ jobs:
         run: |
           MAISYS_RELEASE_URL="file://$PWD/dist" bash -s -- <install.sh
           ~/.local/bin/maisys --version
+      # Likewise for self-update: an older maisys should update itself to the
+      # snapshot and restart. Snapshot versions are <last tag>-SNAPSHOT-<commit>
+      # (0.0.0-SNAPSHOT-<commit> before the first tag), so the older build is
+      # 0.0.0-0, which sorts before any of them, and the expected version comes
+      # from GoReleaser's metadata. sync is still a placeholder, so it then
+      # fails; that's fine.
+      - name: Self-update to the snapshot
+        run: |
+          version=$(jq -r .version dist/metadata.json)
+          echo "snapshot version: $version"
+          go build -o old/maisys -ldflags "-X github.com/plombardi89/maisys2/internal/buildinfo.version=0.0.0-0" ./cmd/maisys
+          MAISYS_RELEASE_URL="file://$PWD/dist" ./old/maisys sync --dry-run >sync.log 2>&1 || true
+          cat sync.log
+          grep -qF "updated from 0.0.0-0 to $version;" sync.log
+          ./old/maisys --version | tee version.txt
+          grep -qF "maisys $version " version.txt
