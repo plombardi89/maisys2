@@ -61,6 +61,10 @@ jobs:
       - name: Install build dependencies
         run: dnf install -y --setopt=install_weak_deps=False git-core tar gzip gcc
       - uses: actions/checkout@v7
+      # The container runs as root but the checkout belongs to the runner's
+      # user, so git (and Go's VCS stamping) would refuse the repo.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
