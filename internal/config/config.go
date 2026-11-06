@@ -13,6 +13,16 @@ const (
 	Windows OS = "windows"
 )
 
+// LinuxOS returns the Linux distributions maisys supports.
+func LinuxOS() []OS {
+	return []OS{Fedora, Ubuntu}
+}
+
+// AllOS returns every operating system maisys supports.
+func AllOS() []OS {
+	return []OS{Fedora, Ubuntu, Windows}
+}
+
 // Arch is a CPU architecture a Linux machine can declare with the arch key.
 type Arch string
 
@@ -22,13 +32,23 @@ const (
 	ARM64 Arch = "arm64"
 )
 
-// Module describes one module's configuration to the loader.
-type Module interface {
+// Module describes one module to the loader, and to the generated docs and
+// config init.
+type Module struct {
 	// Name is the module's table in config files, for example "golang".
-	Name() string
+	Name string
+	// Summary describes what the module does, in one sentence.
+	Summary string
+	// OS lists the operating systems the module supports.
+	OS []OS
+	// Arch lists the CPU architectures the module supports. Empty means
+	// every architecture.
+	Arch []Arch
+	// Hidden modules are left out of the generated docs and config init.
+	Hidden bool
 	// NewConfig returns a pointer to a new config struct holding the
 	// module's defaults.
-	NewConfig() ModuleConfig
+	NewConfig func() ModuleConfig
 }
 
 // ModuleConfig is a module's config struct. Every one embeds Toggle.
@@ -47,12 +67,23 @@ type ModuleConfig interface {
 // Toggle provides the enabled key every module has. Modules are off unless
 // a profile or machine file turns them on.
 type Toggle struct {
+	// Enabled turns the module on.
 	Enabled bool `toml:"enabled"`
 }
 
 // IsEnabled reports whether the module is turned on.
 func (t Toggle) IsEnabled() bool {
 	return t.Enabled
+}
+
+// Latest is the version that means the newest stable release.
+const Latest = "latest"
+
+// Versioned is embedded by modules that install a tool at a chosen version.
+type Versioned struct {
+	// Version to install: "latest" (the default) for the newest stable
+	// release, or an exact version such as "1.2.3" to pin it.
+	Version string `toml:"version"`
 }
 
 // Defaulter is implemented by the values of tables keyed by name (for

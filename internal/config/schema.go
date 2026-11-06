@@ -30,12 +30,16 @@ func newSchema(modules []Module) (*schema, error) {
 
 	seen := map[string]bool{}
 	for i, mod := range modules {
-		name := mod.Name()
+		name := mod.Name
 		switch {
 		case reserved[name]:
 			return nil, fmt.Errorf("module name %q is a reserved key", name)
 		case seen[name]:
 			return nil, fmt.Errorf("module %q is registered more than once", name)
+		case mod.NewConfig == nil:
+			return nil, fmt.Errorf("module %q has no NewConfig", name)
+		case len(mod.OS) == 0:
+			return nil, fmt.Errorf("module %q supports no operating system", name)
 		}
 		seen[name] = true
 

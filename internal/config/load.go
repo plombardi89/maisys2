@@ -90,18 +90,18 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 	layers = append(layers, machineFile)
 
 	for _, mod := range r.Modules {
-		m.Modules[mod.Name()] = freshDefaults(mod)
+		m.Modules[mod.Name] = freshDefaults(mod)
 	}
 	for _, l := range layers {
 		mg := &merger{file: l.path, origins: m.Origins}
 		for i, mod := range r.Modules {
-			present, ok := l.present[mod.Name()].(map[string]any)
+			present, ok := l.present[mod.Name].(map[string]any)
 			if !ok {
 				continue
 			}
-			dst := reflect.ValueOf(m.Modules[mod.Name()]).Elem()
+			dst := reflect.ValueOf(m.Modules[mod.Name]).Elem()
 			src := l.value.FieldByName(moduleField(i)).Elem()
-			mg.mergeStruct(dst, src, present, mod.Name())
+			mg.mergeStruct(dst, src, present, mod.Name)
 		}
 	}
 	return m, nil

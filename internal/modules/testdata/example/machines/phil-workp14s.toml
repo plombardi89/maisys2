@@ -1,0 +1,11 @@
+os = "ubuntu"
+os_version = "26.04"               # optional: refuse to run on any other version
+arch = "amd64"                     # optional: refuse to run on any other CPU architecture
+profiles = ["base", "ubuntu", "dev", "gaming"]
+
+[packages]
+install = ["podman-compose"]       # added to the ubuntu profile's list
+
+[intellij]
+enabled = true
+version = "2026.2.3"

@@ -80,7 +80,7 @@ func TestSchemaRejectsConfigsItCantMerge(t *testing.T) {
 			cfg := tt.config
 			repo := &config.Repo{
 				FS:      fstest.MapFS{"machines/box.toml": file(``)},
-				Modules: []config.Module{testModule{"bad", func() config.ModuleConfig { return cfg }}},
+				Modules: []config.Module{testModule("bad", func() config.ModuleConfig { return cfg })},
 			}
 			_, err := repo.LoadMachine("box")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -125,7 +125,7 @@ source = "extra"
 `),
 			"machines/b.toml": file(``),
 		},
-		Modules: []config.Module{testModule{"shared", func() config.ModuleConfig { return shared }}},
+		Modules: []config.Module{testModule("shared", func() config.ModuleConfig { return shared })},
 	}
 
 	a, err := repo.LoadMachine("a")

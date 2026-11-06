@@ -1,0 +1,22 @@
+[golang]
+enabled = true
+tools = [
+  "github.com/go-task/task/v3/cmd/task@latest",
+  "golang.org/x/tools/cmd/goimports@latest",
+  "mvdan.cc/gofumpt@latest",
+]
+
+[golangci_lint]
+enabled = true
+version = "2.15.0"                       # pinned
+
+[kubectl]
+enabled = true
+
+[hashicorp]
+enabled = true
+tools = ["packer", "vagrant"]
+
+[python_tools]
+enabled = true
+tools = ["azure-cli", "codespell", "ftfy"]

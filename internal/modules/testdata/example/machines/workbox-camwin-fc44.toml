@@ -1,0 +1,12 @@
+os = "fedora"
+os_version = "44"
+profiles = ["base", "fedora", "dev", "wsl"]
+
+[golang]
+version = "1.26.4"                   # pin instead of following latest
+
+[shell.zsh]
+snippets = ["shell/zsh/goproxy.zsh"] # added to the base profile's zsh snippets
+
+[files.items.nvim]
+enabled = false                      # turn off one inherited item

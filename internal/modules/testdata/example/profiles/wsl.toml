@@ -1,0 +1,4 @@
+[wsl]
+enabled = true
+git_credential_manager = true    # use the Windows Git Credential Manager
+append_windows_path = false      # keep the Windows PATH out of WSL

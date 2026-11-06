@@ -1,0 +1,5 @@
+os = "fedora"
+
+[packages]
+enabled = true
+install = ["gnupg2", "htop", "jq", "netcat", "socat", "tmux", "unzip", "zip"]
