@@ -1,7 +1,6 @@
 #:schema https://github.com/plombardi89/maisys2/releases/latest/download/config.schema.json
 
 [sudo]
-enabled = true
 nopasswd = true
 
 [shell]

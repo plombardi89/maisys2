@@ -20,10 +20,19 @@ func (Module) NewConfig() config.ModuleConfig {
 	return &Config{}
 }
 
-// Config is the sudo module's config.
+// Config is the sudo module's config. It has no enabled key: nopasswd is
+// its only setting, and it turns the module on. maisys never uninstalls
+// sudo.
 type Config struct {
-	config.Toggle
 	// NoPasswd lets your user run sudo without a password, through a rule
 	// in /etc/sudoers.d that is checked with visudo before it's installed.
+	// Turning it off deletes that rule again, unless your user isn't in the
+	// wheel or sudo group, which would leave them without sudo.
 	NoPasswd bool `toml:"nopasswd"`
+}
+
+// IsEnabled reports whether the module has anything to do: whether
+// nopasswd is on.
+func (c *Config) IsEnabled() bool {
+	return c.NoPasswd
 }

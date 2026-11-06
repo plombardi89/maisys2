@@ -64,6 +64,10 @@ type Distro struct {
 	Image string `toml:"image"`
 	// Machine is the Linux machine file maisys applies inside the distro.
 	Machine string `toml:"machine"`
-	// User is the Linux user to create, with passwordless sudo.
+	// User is the Linux user to create, in the wheel or sudo group. It gets
+	// a random password, shown once when the distro is created, which you
+	// should change with passwd. For the first sync inside the distro only,
+	// maisys adds a temporary rule that lets it use sudo without the
+	// password; set sudo.nopasswd in the machine file to keep that.
 	User string `toml:"user"`
 }

@@ -254,7 +254,7 @@ func TestExample(t *testing.T) {
 			arch:      config.AMD64,
 			profileOS: map[string]config.OS{"ubuntu": config.Ubuntu},
 			modules: map[string]config.ModuleConfig{
-				"sudo": &sudo.Config{Enabled: true, NoPasswd: true},
+				"sudo": &sudo.Config{NoPasswd: true},
 				"packages": &packages.Config{Enabled: true, Install: []string{
 					"gnupg", "htop", "jq", "netcat-openbsd", "socat", "tmux", "unzip", "zip", "podman-compose",
 				}},
@@ -279,7 +279,7 @@ func TestExample(t *testing.T) {
 			osVersion: "44",
 			profileOS: map[string]config.OS{"fedora": config.Fedora},
 			modules: map[string]config.ModuleConfig{
-				"sudo": &sudo.Config{Enabled: true, NoPasswd: true},
+				"sudo": &sudo.Config{NoPasswd: true},
 				"packages": &packages.Config{Enabled: true, Install: []string{
 					"gnupg2", "htop", "jq", "netcat", "socat", "tmux", "unzip", "zip",
 				}},

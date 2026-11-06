@@ -58,7 +58,8 @@ type ModuleInfo struct {
 	Hidden bool
 }
 
-// ModuleConfig is a module's config struct. Every one embeds Toggle.
+// ModuleConfig is a module's config struct. Most embed Toggle for the
+// enabled key; a module without one implements IsEnabled itself.
 //
 // Struct fields are read from TOML keys named by their toml tags. When
 // layers are merged, a value set by a later layer replaces an earlier one,
@@ -71,8 +72,8 @@ type ModuleConfig interface {
 	IsEnabled() bool
 }
 
-// Toggle provides the enabled key every module has. Modules are off unless
-// a profile or machine file turns them on.
+// Toggle provides a module's enabled key. Modules are off unless a profile
+// or machine file turns them on.
 type Toggle struct {
 	// Enabled turns the module on.
 	Enabled bool `toml:"enabled"`
