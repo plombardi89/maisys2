@@ -5,7 +5,7 @@ maisys is a Go binary that sets up and maintains development machines (Fedora, U
 ## Repository structure
 
 - `cmd/maisys/` - the `maisys` entry point.
-- `internal/buildinfo/` - version information set at build time with `-ldflags`, including the repo self-update installs from (`updateRepo`, for forks).
+- `internal/buildinfo/` - version information set at build time with `-ldflags`, including the repo self-update installs from (`updateRepo`). Release builds set it from `GITHUB_REPOSITORY`, so a fork's releases update from the fork; a fork also needs to change the default URL in `install.sh`.
 - `internal/cli/` - the cobra command tree (`sync`, `config`, `status`).
 - `internal/selfupdate/` - checks the latest release's `checksums.txt` and replaces the running binary if that release is newer (the first step of `sync`). `MAISYS_RELEASE_URL` points it, and `install.sh`, at other release files (http, https or file) for testing.
 - `.github/workflows/` - CI (`ci.yml`) and releases (`release.yml`).

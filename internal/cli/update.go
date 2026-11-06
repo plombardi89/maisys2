@@ -17,12 +17,18 @@ import (
 // new binary doesn't check for updates again.
 const selfUpdatedEnv = "MAISYS_SELF_UPDATED"
 
+// buildVersion returns the version of the running binary. Tests replace it to
+// act as a release build.
+var buildVersion = buildinfo.Version
+
 // updateSelf is the first step of sync. If a newer release exists, it
-// installs it and runs the same command again with the new binary. Any
-// failure is only a warning, so the sync carries on with this binary.
+// installs it and runs the same command again with the new binary. Failures
+// are only warnings, so the sync carries on with this binary, except for
+// Ctrl-C, which stops the sync.
 func updateSelf(cmd *cobra.Command, g *globalOptions) error {
 	errOut := cmd.ErrOrStderr()
-	if buildinfo.IsDev() {
+	current := buildVersion()
+	if current == buildinfo.DevVersion {
 		g.debugf(errOut, "not checking for a newer maisys: this is a development build")
 		return nil
 	}
@@ -30,7 +36,6 @@ func updateSelf(cmd *cobra.Command, g *globalOptions) error {
 		return nil
 	}
 
-	current := buildinfo.Version()
 	warn := func(format string, a ...any) {
 		_, _ = fmt.Fprintf(errOut, "maisys: warning: "+format+"\n", a...)
 	}
@@ -57,6 +62,11 @@ func updateSelf(cmd *cobra.Command, g *globalOptions) error {
 	g.debugf(errOut, "checking %s for a newer maisys", releaseURL)
 	rel, updated, err := u.Update(cmd.Context())
 	if err != nil {
+		// Ctrl-C cancels the context. Stop rather than carry on with a
+		// cancelled context that would fail every later step.
+		if ctxErr := cmd.Context().Err(); ctxErr != nil {
+			return fmt.Errorf("interrupted while checking for a newer maisys: %w", ctxErr)
+		}
 		warn("couldn't update maisys: %v (carrying on with %s)", err, current)
 		return nil
 	}

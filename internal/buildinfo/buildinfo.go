@@ -11,17 +11,22 @@ import (
 	"strings"
 )
 
+// DevVersion is the version of builds that aren't releases.
+const DevVersion = "dev"
+
 var (
-	version = "dev"
+	version = DevVersion
 	commit  = ""
 	date    = ""
 
 	// updateRepo is the GitHub repo (owner/name) self-update installs
-	// releases from. Forks can set their own with -ldflags.
+	// releases from. Release builds set it to the repo that built them (see
+	// .goreleaser.yaml), so forks update from their own releases.
 	updateRepo = "plombardi89/maisys2"
 )
 
-// Version returns the release version, or "dev" for builds that aren't releases.
+// Version returns the release version, or DevVersion for builds that aren't
+// releases.
 func Version() string {
 	return version
 }
@@ -34,7 +39,7 @@ func UpdateRepo() string {
 
 // IsDev reports whether this is a development build rather than a release.
 func IsDev() bool {
-	return version == "dev"
+	return version == DevVersion
 }
 
 // String describes the build on one line, for example
