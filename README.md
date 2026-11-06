@@ -10,9 +10,10 @@ maisys sets up and maintains development machines from a config repo that you ke
 You need Go 1.27 or newer.
 
 ```sh
-make build   # builds bin/maisys
-make test    # runs the unit tests
-make lint    # runs golangci-lint
+make build     # builds bin/maisys
+make test      # runs the unit tests
+make lint      # runs golangci-lint
+make snapshot  # builds the release archives into dist/ without publishing
 ```
 
 Run `make help` to list every target.

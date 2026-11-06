@@ -1,0 +1,49 @@
+version: 2
+
+project_name: maisys
+
+builds:
+  - id: maisys
+    main: ./cmd/maisys
+    binary: maisys
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/plombardi89/maisys2/internal/buildinfo.version={{ .Version }}
+      - -X github.com/plombardi89/maisys2/internal/buildinfo.commit={{ .ShortCommit }}
+      - -X github.com/plombardi89/maisys2/internal/buildinfo.date={{ .Date }}
+
+archives:
+  - id: maisys
+    name_template: "maisys_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# Releases are created as drafts. The release workflow publishes them only
+# after every test has passed against the draft's files, so self-update
+# (which follows releases/latest) never sees an untested release.
+release:
+  draft: true
+  replace_existing_draft: true
+
+changelog:
+  use: github
+  sort: asc
