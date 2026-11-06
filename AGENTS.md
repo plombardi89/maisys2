@@ -9,6 +9,8 @@ maisys is a Go binary that sets up and maintains development machines (Fedora, U
 - `internal/cli/` - the cobra command tree (`sync`, `config`, `status`).
 - `.github/workflows/` - CI (`ci.yml`) and releases (`release.yml`).
 - `.goreleaser.yaml` - how release archives and checksums are built.
+- `install.sh` - the Linux installer and uninstaller, published with each release. It must stay a single self-contained bash script.
+- `test/install/` - Go tests for `install.sh`. They pipe it into bash against a fake release, with only the tools it's allowed to use on PATH. If `install.sh` needs a new command, add it to `baseTools` there.
 
 New packages go under `internal/`, following the layout in issue #1.
 

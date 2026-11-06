@@ -36,6 +36,8 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: ./install.sh
 
 # Releases are created as drafts. The release workflow publishes them only
 # after every test has passed against the draft's files, so self-update
@@ -43,6 +45,8 @@ checksum:
 release:
   draft: true
   replace_existing_draft: true
+  extra_files:
+    - glob: ./install.sh
 
 changelog:
   use: github
