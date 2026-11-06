@@ -39,19 +39,29 @@ func (i *fileItem) SetDefaults() {
 	i.Enabled = true
 }
 
-type testModule struct {
-	name      string
+// fakeModule is a module for tests.
+type fakeModule struct {
+	info      config.ModuleInfo
 	newConfig func() config.ModuleConfig
 }
 
-func (m testModule) Name() string                   { return m.name }
-func (m testModule) NewConfig() config.ModuleConfig { return m.newConfig() }
+func (m fakeModule) Info() config.ModuleInfo        { return m.info }
+func (m fakeModule) NewConfig() config.ModuleConfig { return m.newConfig() }
+
+// testModule returns a module for tests, supported on Fedora.
+func testModule(name string, newConfig func() config.ModuleConfig) config.Module {
+	return fakeModule{info: config.ModuleInfo{Name: name, OS: []config.OS{config.Fedora}}, newConfig: newConfig}
+}
+
+func newGolangConfig() config.ModuleConfig {
+	return &golangConfig{}
+}
 
 var testModules = []config.Module{
-	testModule{"golang", func() config.ModuleConfig {
+	testModule("golang", func() config.ModuleConfig {
 		return &golangConfig{Version: "latest", Tools: []string{"default-tool"}}
-	}},
-	testModule{"files", func() config.ModuleConfig { return &filesConfig{} }},
+	}),
+	testModule("files", func() config.ModuleConfig { return &filesConfig{} }),
 }
 
 func load(t *testing.T, files fstest.MapFS, machine string) (*config.Machine, error) {
@@ -434,21 +444,36 @@ func TestInvalidModules(t *testing.T) {
 	}{
 		{
 			name:    "reserved name",
-			modules: []config.Module{testModule{"os", func() config.ModuleConfig { return &golangConfig{} }}},
+			modules: []config.Module{testModule("os", newGolangConfig)},
 			want:    `module name "os" is a reserved key`,
 		},
 		{
 			name: "registered twice",
 			modules: []config.Module{
-				testModule{"golang", func() config.ModuleConfig { return &golangConfig{} }},
-				testModule{"golang", func() config.ModuleConfig { return &golangConfig{} }},
+				testModule("golang", newGolangConfig),
+				testModule("golang", newGolangConfig),
 			},
 			want: `module "golang" is registered more than once`,
 		},
 		{
 			name:    "config isn't a pointer to a struct",
-			modules: []config.Module{testModule{"golang", func() config.ModuleConfig { return config.Toggle{} }}},
+			modules: []config.Module{testModule("golang", func() config.ModuleConfig { return config.Toggle{} })},
 			want:    "NewConfig must return a pointer to a struct",
+		},
+		{
+			name:    "nil module",
+			modules: []config.Module{testModule("golang", newGolangConfig), nil},
+			want:    "module 1 is nil",
+		},
+		{
+			name:    "no name",
+			modules: []config.Module{testModule("", newGolangConfig)},
+			want:    "module 0 has no name",
+		},
+		{
+			name:    "no operating system",
+			modules: []config.Module{fakeModule{info: config.ModuleInfo{Name: "golang"}, newConfig: newGolangConfig}},
+			want:    `module "golang" supports no operating system`,
 		},
 	}
 	for _, tt := range tests {

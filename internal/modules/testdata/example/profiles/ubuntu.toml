@@ -1,0 +1,5 @@
+os = "ubuntu"
+
+[packages]
+enabled = true
+install = ["gnupg", "htop", "jq", "netcat-openbsd", "socat", "tmux", "unzip", "zip"]

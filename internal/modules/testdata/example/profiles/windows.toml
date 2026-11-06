@@ -1,0 +1,8 @@
+os = "windows"
+
+[winget]
+enabled = true
+install = ["Microsoft.WindowsTerminal"]   # Git.Git is always managed, because maisys needs it
+
+[windows_terminal]
+enabled = true                            # makes wsl_host.default_distro the default profile

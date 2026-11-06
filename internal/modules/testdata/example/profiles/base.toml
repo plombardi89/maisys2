@@ -1,0 +1,66 @@
+#:schema https://github.com/plombardi89/maisys2/releases/latest/download/config.schema.json
+
+[sudo]
+nopasswd = true
+
+[shell]
+enabled = true
+login = "zsh"                            # must be one of the enabled shells
+
+[shell.zsh]
+enabled = true
+manage_rc = true                         # maisys writes ~/.zshrc
+pre_snippets = ["shell/zsh/zstyles.zsh"] # sourced before oh-my-zsh loads
+snippets = ["shell/zsh/aliases.zsh"]     # sourced after everything else
+
+[shell.zsh.variables]                    # set before oh-my-zsh loads
+HIST_STAMPS = "yyyy-mm-dd"
+DISABLE_UNTRACKED_FILES_DIRTY = "true"
+
+[shell.zsh.oh_my_zsh]
+enabled = true
+ref = "master"                           # branch, tag or commit
+theme = "aphrodite"
+plugins = ["git", "zsh-autosuggestions", "zsh-syntax-highlighting"]
+
+[shell.zsh.oh_my_zsh.custom_themes.aphrodite]
+repo = "https://github.com/win0err/aphrodite-terminal-theme"
+ref = "master"
+file = "aphrodite.zsh-theme"             # the theme file inside the repo
+
+[shell.zsh.oh_my_zsh.custom_plugins.zsh-autosuggestions]
+repo = "https://github.com/zsh-users/zsh-autosuggestions"
+ref = "v0.7.1"
+
+[shell.zsh.oh_my_zsh.custom_plugins.zsh-syntax-highlighting]
+repo = "https://github.com/zsh-users/zsh-syntax-highlighting"
+ref = "master"
+
+[shell.bash]
+enabled = true
+manage_rc = false                        # leave ~/.bashrc alone; it sources env.sh with one line you add
+snippets = ["shell/bash/aliases.sh"]
+
+[shell.fish]
+enabled = true
+snippets = ["shell/fish/abbr.fish"]
+
+[files]
+enabled = true
+
+[files.vars]
+email = "phil@example.com"
+
+[files.items.gitconfig]
+source = "files/gitconfig.tmpl"          # path in the config repo
+target = "~/.gitconfig"
+template = true                          # Go text/template with .Vars, .Facts and .Machine
+
+[files.items.ssh_config]
+source = "files/ssh_config"
+target = "~/.ssh/config"
+mode = "0600"
+
+[files.items.nvim]
+source = "files/nvim/"                   # a directory is copied file by file
+target = "~/.config/nvim/"

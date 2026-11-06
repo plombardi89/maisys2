@@ -1,0 +1,16 @@
+os = "windows"
+profiles = ["windows"]
+
+[wsl_host]
+enabled = true
+default_distro = "fedora-dev"
+config_url = "https://github.com/plombardi89/maisys-config.git"   # required if this host clones over SSH
+
+[wsl_host.wslconfig]                 # written to %USERPROFILE%\.wslconfig
+networking_mode = "mirrored"
+memory = "16GB"
+
+[wsl_host.distros.fedora-dev]
+image = "FedoraLinux-44"             # a name from `wsl --list --online`; must match the machine's os
+machine = "workbox-camwin-fc44"      # the Linux machine file applied inside the distro
+user = "phil"                        # required: the Linux user to create
