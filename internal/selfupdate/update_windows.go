@@ -46,8 +46,7 @@ func Restart(ctx context.Context, exe string, args, env []string) (int, error) {
 	cmd.Env = env
 
 	err := cmd.Run()
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exitErr.ExitCode(), nil
 	}
 	if err != nil {

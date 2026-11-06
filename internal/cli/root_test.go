@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-func run(t *testing.T, env map[string]string, args ...string) (code int, stdout, stderr string) {
+func run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	getenv := func(key string) string { return env[key] }
+	getenv := func(string) string { return "" }
 	code = Execute(context.Background(), args, &out, &errOut, getenv)
 	return code, out.String(), errOut.String()
 }
 
 func TestVersionFlag(t *testing.T) {
-	code, stdout, stderr := run(t, nil, "--version")
+	code, stdout, stderr := run(t, "--version")
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want %d (stderr: %q)", code, exitOK, stderr)
 	}
@@ -26,7 +26,7 @@ func TestVersionFlag(t *testing.T) {
 }
 
 func TestHelpListsCommands(t *testing.T) {
-	code, stdout, _ := run(t, nil, "--help")
+	code, stdout, _ := run(t, "--help")
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want %d", code, exitOK)
 	}
@@ -52,7 +52,7 @@ func TestPlaceholderCommands(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
-			code, _, stderr := run(t, nil, tt.args...)
+			code, _, stderr := run(t, tt.args...)
 			if code != exitError {
 				t.Errorf("exit code = %d, want %d", code, exitError)
 			}
@@ -76,7 +76,7 @@ func TestUsageErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
-			code, _, stderr := run(t, nil, tt.args...)
+			code, _, stderr := run(t, tt.args...)
 			if code != exitError {
 				t.Errorf("exit code = %d, want %d", code, exitError)
 			}
@@ -92,17 +92,17 @@ func TestSyncSelfUpdateStep(t *testing.T) {
 	// these don't touch the network.
 	const devMsg = "not checking for a newer maisys: this is a development build"
 
-	_, _, stderr := run(t, nil, "sync", "-v")
+	_, _, stderr := run(t, "sync", "-v")
 	if !strings.Contains(stderr, devMsg) {
 		t.Errorf("sync -v: stderr = %q, want it to contain %q", stderr, devMsg)
 	}
 
-	_, _, stderr = run(t, nil, "sync", "-v", "--local")
+	_, _, stderr = run(t, "sync", "-v", "--local")
 	if strings.Contains(stderr, devMsg) {
 		t.Errorf("sync -v --local: stderr = %q, want no self-update step", stderr)
 	}
 
-	_, _, stderr = run(t, nil, "sync")
+	_, _, stderr = run(t, "sync")
 	if strings.Contains(stderr, devMsg) {
 		t.Errorf("sync without -v: stderr = %q, want the message only with --verbose", stderr)
 	}

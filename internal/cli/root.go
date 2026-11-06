@@ -64,8 +64,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, geten
 	root.SetErr(stderr)
 
 	if err := root.ExecuteContext(ctx); err != nil {
-		var exit exitCodeError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[exitCodeError](err); ok {
 			return exit.code
 		}
 		_, _ = fmt.Fprintf(stderr, "maisys: %v\n", err)

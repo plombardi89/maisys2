@@ -28,11 +28,14 @@ You need Go 1.27 or newer.
 ```sh
 make build     # builds bin/maisys
 make test      # runs the unit tests
-make lint      # runs golangci-lint
+make lint      # lints Go code, shell scripts and GitHub workflows
+make fmt       # formats Go code (gofumpt, goimports) and shell scripts (shfmt)
 make snapshot  # builds the release archives into dist/ without publishing
 ```
 
-Run `make help` to list every target.
+Run `make help` to list every target. The lint tools are pinned in the `Makefile` and installed into `bin/` the first time you run `make lint`.
+
+CI fails on Go code that isn't formatted with gofumpt. To have your editor format the same way when you save, turn on gopls's gofumpt setting (`"formatting.gofumpt": true`). Imports are grouped by `make fmt`.
 
 ## License
 

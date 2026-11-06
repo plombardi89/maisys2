@@ -2,10 +2,25 @@ VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Lint and format tools. Each is installed into bin/ once per version, so
+# local runs and CI use exactly the same versions.
 GOLANGCI_LINT_VERSION ?= v2.15.0
-# Installed into bin/ (once per version) rather than run with "go run", so it
-# can also lint the Windows build with GOOS=windows.
+SHFMT_VERSION         ?= v3.14.1
+ACTIONLINT_VERSION    ?= v1.7.12
+# shellcheck isn't a Go tool, so its release binary is downloaded and checked
+# against these sha256 sums (from GitHub's release asset digests). Update the
+# version and the sums together.
+SHELLCHECK_VERSION        := v0.11.0
+SHELLCHECK_SHA256_x86_64  := b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+SHELLCHECK_SHA256_aarch64 := 68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+
 GOLANGCI_LINT := bin/golangci-lint-$(GOLANGCI_LINT_VERSION)
+SHFMT         := bin/shfmt-$(SHFMT_VERSION)
+ACTIONLINT    := bin/actionlint-$(ACTIONLINT_VERSION)
+SHELLCHECK    := bin/shellcheck-$(SHELLCHECK_VERSION)
+
+# Every shell script git tracks, found by extension or #! line.
+SHELL_SCRIPTS = $$(git ls-files -z | xargs -0 $(SHFMT) -f)
 
 GORELEASER_VERSION ?= v2.20.0
 GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
@@ -13,10 +28,10 @@ GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 BUILDINFO := github.com/plombardi89/maisys2/internal/buildinfo
 LDFLAGS   := -s -w -X $(BUILDINFO).version=$(VERSION) -X $(BUILDINFO).commit=$(COMMIT) -X $(BUILDINFO).date=$(DATE)
 
-.PHONY: help build test lint fmt generate tidy snapshot clean
+.PHONY: help build test lint lint-go lint-shell lint-workflows fmt generate tidy snapshot clean
 
 help: ## Show this help
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
 build: ## Build bin/maisys
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/maisys ./cmd/maisys
@@ -24,17 +39,52 @@ build: ## Build bin/maisys
 test: ## Run the unit tests
 	go test ./...
 
-lint: $(GOLANGCI_LINT) ## Run golangci-lint for Linux and Windows, and shellcheck if it's installed
+lint: lint-go lint-shell lint-workflows ## Run every linter
+
+lint-go: $(GOLANGCI_LINT) ## Lint Go code (Linux and Windows builds), including formatting
 	$(GOLANGCI_LINT) run
 	GOOS=windows $(GOLANGCI_LINT) run
-	@if command -v shellcheck >/dev/null; then shellcheck install.sh; else echo "shellcheck not installed; skipping (CI runs it)"; fi
 
-fmt: $(GOLANGCI_LINT) ## Format the code
+lint-shell: $(SHELLCHECK) $(SHFMT) ## Lint shell scripts with shellcheck, and check their formatting with shfmt
+	$(SHELLCHECK) $(SHELL_SCRIPTS)
+	$(SHFMT) -d $(SHELL_SCRIPTS)
+
+lint-workflows: $(ACTIONLINT) $(SHELLCHECK) ## Lint GitHub workflows with actionlint, including shellcheck on run: steps
+	$(ACTIONLINT) -shellcheck $(SHELLCHECK)
+
+fmt: $(GOLANGCI_LINT) $(SHFMT) ## Format Go code (gofumpt, goimports) and shell scripts (shfmt)
 	$(GOLANGCI_LINT) fmt
+	$(SHFMT) -w $(SHELL_SCRIPTS)
 
 $(GOLANGCI_LINT):
 	GOBIN=$(CURDIR)/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	mv bin/golangci-lint $@
+
+$(SHFMT):
+	GOBIN=$(CURDIR)/bin go install mvdan.cc/sh/v3/cmd/shfmt@$(SHFMT_VERSION)
+	mv bin/shfmt $@
+
+$(ACTIONLINT):
+	GOBIN=$(CURDIR)/bin go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	mv bin/actionlint $@
+
+$(SHELLCHECK):
+	@set -eu; \
+	[ "$$(uname -s)" = Linux ] || { echo "no pinned shellcheck for $$(uname -s); install shellcheck $(SHELLCHECK_VERSION) as $@" >&2; exit 1; }; \
+	case "$$(uname -m)" in \
+	x86_64 | amd64) arch=x86_64; sum=$(SHELLCHECK_SHA256_x86_64) ;; \
+	aarch64 | arm64) arch=aarch64; sum=$(SHELLCHECK_SHA256_aarch64) ;; \
+	*) echo "no pinned shellcheck for $$(uname -m)" >&2; exit 1 ;; \
+	esac; \
+	archive=shellcheck-$(SHELLCHECK_VERSION).linux.$$arch.tar.gz; \
+	rm -rf bin/shellcheck.tmp; \
+	trap 'rm -rf bin/shellcheck.tmp' EXIT; \
+	mkdir -p bin/shellcheck.tmp; \
+	echo "downloading $$archive"; \
+	curl -fsSL -o bin/shellcheck.tmp/$$archive https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/$$archive; \
+	echo "$$sum  bin/shellcheck.tmp/$$archive" | sha256sum -c --quiet -; \
+	tar -xzf bin/shellcheck.tmp/$$archive -C bin/shellcheck.tmp; \
+	mv bin/shellcheck.tmp/shellcheck-$(SHELLCHECK_VERSION)/shellcheck $@
 
 generate: ## Regenerate generated files
 	go generate ./...
@@ -45,5 +95,5 @@ tidy: ## Tidy go.mod and go.sum
 snapshot: ## Build release archives into dist/ without publishing
 	$(GORELEASER) release --snapshot --clean
 
-clean: ## Remove build output
+clean: ## Remove build output and installed tools
 	rm -rf bin dist

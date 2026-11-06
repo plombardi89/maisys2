@@ -51,7 +51,7 @@ func newRelease(t *testing.T, version string, tweak func(archives map[string][]b
 
 	archives := map[string][]byte{}
 	for _, target := range all {
-		goos := strings.SplitN(target, "_", 2)[0]
+		goos, _, _ := strings.Cut(target, "_")
 		name := fmt.Sprintf("maisys_%s_%s%s", version, target, archiveExt(goos))
 		files := map[string]string{"LICENSE": "MIT", binaryName(goos): binaryFor(version, target)}
 		if goos == "windows" {
@@ -198,6 +198,7 @@ func TestUpdateFailures(t *testing.T) {
 			name:    "checksum mismatch",
 			current: "0.1.0",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				rel := newRelease(t, "0.2.0", nil)
 				writeFile(t, filepath.Join(rel.dir, archive), []byte("tampered"))
 				return rel.url
@@ -208,6 +209,7 @@ func TestUpdateFailures(t *testing.T) {
 			name:    "binary missing from the archive",
 			current: "0.1.0",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				return newRelease(t, "0.2.0", func(archives map[string][]byte) {
 					files := map[string]string{"LICENSE": "MIT"}
 					if runtime.GOOS == "windows" {
@@ -223,6 +225,7 @@ func TestUpdateFailures(t *testing.T) {
 			name:    "corrupt archive",
 			current: "0.1.0",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				return newRelease(t, "0.2.0", func(archives map[string][]byte) {
 					archives[archive] = []byte("not an archive")
 				}).url
@@ -233,6 +236,7 @@ func TestUpdateFailures(t *testing.T) {
 			name:    "no release",
 			current: "0.1.0",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				return newRelease(t, "0.2.0", nil).url + "/missing"
 			},
 			want: "404 Not Found",
@@ -241,6 +245,7 @@ func TestUpdateFailures(t *testing.T) {
 			name:    "invalid version in checksums.txt",
 			current: "0.1.0",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				return newRelease(t, "latest", nil).url
 			},
 			want: "has an invalid version",
@@ -249,6 +254,7 @@ func TestUpdateFailures(t *testing.T) {
 			name:    "running version isn't a release",
 			current: "dev",
 			setup: func(t *testing.T) string {
+				t.Helper()
 				return newRelease(t, "0.2.0", nil).url
 			},
 			want: `running version "dev" isn't a release version`,
@@ -354,7 +360,7 @@ func TestRestart(t *testing.T) {
 
 // TestHelperProcess isn't a real test. Other tests run the test binary with
 // SELFUPDATE_HELPER set to make it act as a stand-in for maisys.
-func TestHelperProcess(t *testing.T) {
+func TestHelperProcess(_ *testing.T) {
 	switch os.Getenv("SELFUPDATE_HELPER") {
 	case "":
 		return

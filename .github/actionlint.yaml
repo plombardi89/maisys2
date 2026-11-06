@@ -1,0 +1,7 @@
+# Configuration for actionlint (make lint-workflows).
+self-hosted-runner:
+  # Despite the name, this is the list of extra runner labels actionlint
+  # accepts. These GitHub-hosted labels are newer than its built-in list.
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

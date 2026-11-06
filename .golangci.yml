@@ -3,13 +3,37 @@ version: "2"
 linters:
   default: standard
   enable:
+    # Bugs and correctness.
     - bodyclose
+    - canonicalheader
+    - errchkjson
     - errorlint
-    - gocritic
-    - misspell
+    - exhaustive
+    - fatcontext
+    - forcetypeassert
+    - gocheckcompilerdirectives
+    - makezero
+    - nilerr
+    - nilnil
     - noctx
+    - recvcheck
+    - usetesting
+    - wastedassign
+    # Style and clarity.
+    - dupword
+    - errname
+    - exptostd
+    - gocritic
+    - intrange
+    - mirror
+    - misspell
+    - modernize
     - nolintlint
+    - predeclared
+    - revive
+    - thelper
     - unconvert
+    - unparam
     - usestdlibvars
 
 formatters:
