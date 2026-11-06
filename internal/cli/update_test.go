@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,9 +104,7 @@ func TestSelfUpdateSkipped(t *testing.T) {
 			t.Cleanup(srv.Close)
 
 			env := map[string]string{"MAISYS_RELEASE_URL": srv.URL}
-			for k, v := range tt.env {
-				env[k] = v
-			}
+			maps.Copy(env, tt.env)
 			_, stderr := runWithContext(t.Context(), env, tt.args...)
 			if n := requests.Load(); n != 0 {
 				t.Errorf("made %d requests to the release server, want none", n)

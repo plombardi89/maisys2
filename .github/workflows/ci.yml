@@ -32,13 +32,15 @@ jobs:
           GOOS: windows
         with:
           version: v2.15.0
-      - name: Check shell scripts
-        run: |
-          if ! command -v shellcheck >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y shellcheck
-          fi
-          shellcheck install.sh
+      # shellcheck, shfmt and actionlint at the versions pinned in the
+      # Makefile, the same ones make lint uses locally.
+      - name: Cache lint tools
+        uses: actions/cache@v6
+        with:
+          path: bin
+          key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+      - name: Lint shell scripts and workflows
+        run: make lint-shell lint-workflows
 
   test:
     name: test (${{ matrix.os }})

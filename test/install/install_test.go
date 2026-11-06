@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -100,9 +101,7 @@ func (h *harness) writeRelease(overrides map[string]string) {
 		sum := sha256.Sum256(data)
 		lines[archiveName(arch)] = hex.EncodeToString(sum[:])
 	}
-	for name, s := range overrides {
-		lines[name] = s
-	}
+	maps.Copy(lines, overrides)
 	var b strings.Builder
 	for _, name := range names {
 		if s := lines[name]; s != "" {

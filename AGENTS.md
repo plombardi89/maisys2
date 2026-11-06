@@ -9,6 +9,8 @@ maisys is a Go binary that sets up and maintains development machines (Fedora, U
 - `internal/cli/` - the cobra command tree (`sync`, `config`, `status`).
 - `internal/selfupdate/` - checks the latest release's `checksums.txt` and replaces the running binary if that release is newer (the first step of `sync`). `MAISYS_RELEASE_URL` points it, and `install.sh`, at other release files (http, https or file) for testing.
 - `.github/workflows/` - CI (`ci.yml`) and releases (`release.yml`).
+- `.github/actionlint.yaml` - extra runner labels for actionlint. Add new GitHub-hosted labels here when actionlint doesn't know them yet.
+- `.golangci.yml` - Go linters and formatters (gofumpt, goimports).
 - `.goreleaser.yaml` - how release archives and checksums are built.
 - `install.sh` - the Linux installer and uninstaller, published with each release. It must stay a single self-contained bash script.
 - `test/install/` - Go tests for `install.sh`. They pipe it into bash against a fake release, with only the tools it's allowed to use on PATH. If `install.sh` needs a new command, add it to `baseTools` there.
@@ -19,7 +21,12 @@ New packages go under `internal/`, following the layout in issue #1.
 
 - `make build`, `make test`, `make lint` and `make fmt`. Run `make help` for the full list.
 - Go version: see `go.mod`. If your installed Go is older, `go` downloads the right version automatically.
-- `make lint` installs a pinned golangci-lint into `bin/` and lints both the Linux and the Windows build (`GOOS=windows`), so it doesn't depend on a locally installed copy and catches problems in Windows-only files.
+- `make lint` runs three linters. Fix whatever they report rather than disabling the check; if something really is intended, use a `//nolint:<linter> // reason` comment (Go) or a `# shellcheck disable=SCxxxx # reason` comment (shell).
+    - `make lint-go`: golangci-lint on both the Linux and the Windows build (`GOOS=windows`), so Windows-only files are checked too. It also fails on Go code that isn't formatted with gofumpt and goimports.
+    - `make lint-shell`: shellcheck and shfmt on every shell script git tracks, found by file extension or `#!` line, so new scripts are covered automatically.
+    - `make lint-workflows`: actionlint on the GitHub workflows, including shellcheck on their `run:` steps.
+- `make fmt` formats Go (gofumpt, goimports) and shell scripts (shfmt).
+- The lint tools' versions are pinned at the top of the `Makefile` and installed into `bin/` on first use, so local runs and CI use the same versions. The golangci-lint version is also set in `ci.yml` for golangci-lint's GitHub Action; change both together.
 - Keep `go.mod` tidy (`make tidy`). CI fails if `go mod tidy` would change anything.
 - Tests use the standard `testing` package and are table-driven where it helps.
 - CI runs the tests on Ubuntu 24.04 and 26.04, Ubuntu 26.04 on arm64, Fedora 43, 44 and 45 (in containers), and Windows, so code must build and pass on all of them. The list follows the rolling support policy in issue #1, and the arm64 entry follows the newest Ubuntu LTS: when a release reaches end of life or a new one ships, update the matrix in `ci.yml` and the required checks in the `main` ruleset together.
