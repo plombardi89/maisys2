@@ -35,6 +35,10 @@ linters:
     - unconvert
     - unparam
     - usestdlibvars
+  settings:
+    exhaustive:
+      # A switch with a default case already handles every other value.
+      default-signifies-exhaustive: true
 
 formatters:
   enable:

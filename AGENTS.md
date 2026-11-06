@@ -7,6 +7,7 @@ maisys is a Go binary that sets up and maintains development machines (Fedora, U
 - `cmd/maisys/` - the `maisys` entry point.
 - `internal/buildinfo/` - version information set at build time with `-ldflags`, including the repo self-update installs from (`updateRepo`). Release builds set it from `GITHUB_REPOSITORY`, so a fork's releases update from the fork; a fork also needs to change the default URL in `install.sh`.
 - `internal/cli/` - the cobra command tree (`sync`, `config`, `status`).
+- `internal/config/` - loads a machine's config from a config repo: `machines/<name>.toml` and the profiles it lists, merged on top of each module's defaults, with every error reported as `file:line:column`. Module config structs declare their keys with `toml` tags; lists tagged `merge:"union"` combine across layers, tables keyed by name merge entry by entry (new entries start from `SetDefaults` if their type has it), and everything else is replaced by the later layer.
 - `internal/selfupdate/` - checks the latest release's `checksums.txt` and replaces the running binary if that release is newer (the first step of `sync`). `MAISYS_RELEASE_URL` points it, and `install.sh`, at other release files (http, https or file) for testing.
 - `.github/workflows/` - CI (`ci.yml`) and releases (`release.yml`).
 - `.github/actionlint.yaml` - extra runner labels for actionlint. Add new GitHub-hosted labels here when actionlint doesn't know them yet.
