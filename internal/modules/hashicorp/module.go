@@ -3,12 +3,21 @@ package hashicorp
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the hashicorp module.
-var Module = config.Module{
-	Name:      "hashicorp",
-	Summary:   "Adds HashiCorp's package repository and installs tools from it.",
-	OS:        config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig { return &Config{} },
+// Module is the hashicorp module.
+type Module struct{}
+
+// Info describes the hashicorp module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "hashicorp",
+		Summary: "Adds HashiCorp's package repository and installs tools from it.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the hashicorp module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{}
 }
 
 // Config is the hashicorp module's config.

@@ -3,14 +3,21 @@ package golang
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the golang module.
-var Module = config.Module{
-	Name:    "golang",
-	Summary: "Installs the Go toolchain, and Go programs with go install.",
-	OS:      config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig {
-		return &Config{Version: config.Latest}
-	},
+// Module is the golang module.
+type Module struct{}
+
+// Info describes the golang module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "golang",
+		Summary: "Installs the Go toolchain, and Go programs with go install.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the golang module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{Version: config.Latest}
 }
 
 // Config is the golang module's config.

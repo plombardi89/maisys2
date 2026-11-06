@@ -3,14 +3,21 @@ package protoc
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the protoc module.
-var Module = config.Module{
-	Name:    "protoc",
-	Summary: "Installs protoc, the Protocol Buffers compiler.",
-	OS:      config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig {
-		return &Config{Version: config.Latest}
-	},
+// Module is the protoc module.
+type Module struct{}
+
+// Info describes the protoc module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "protoc",
+		Summary: "Installs protoc, the Protocol Buffers compiler.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the protoc module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{Version: config.Latest}
 }
 
 // Config is the protoc module's config.

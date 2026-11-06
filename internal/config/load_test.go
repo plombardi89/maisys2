@@ -39,8 +39,22 @@ func (i *fileItem) SetDefaults() {
 	i.Enabled = true
 }
 
+// fakeModule is a module for tests.
+type fakeModule struct {
+	info      config.ModuleInfo
+	newConfig func() config.ModuleConfig
+}
+
+func (m fakeModule) Info() config.ModuleInfo        { return m.info }
+func (m fakeModule) NewConfig() config.ModuleConfig { return m.newConfig() }
+
+// testModule returns a module for tests, supported on Fedora.
 func testModule(name string, newConfig func() config.ModuleConfig) config.Module {
-	return config.Module{Name: name, OS: []config.OS{config.Fedora}, NewConfig: newConfig}
+	return fakeModule{info: config.ModuleInfo{Name: name, OS: []config.OS{config.Fedora}}, newConfig: newConfig}
+}
+
+func newGolangConfig() config.ModuleConfig {
+	return &golangConfig{}
 }
 
 var testModules = []config.Module{
@@ -430,14 +444,14 @@ func TestInvalidModules(t *testing.T) {
 	}{
 		{
 			name:    "reserved name",
-			modules: []config.Module{testModule("os", func() config.ModuleConfig { return &golangConfig{} })},
+			modules: []config.Module{testModule("os", newGolangConfig)},
 			want:    `module name "os" is a reserved key`,
 		},
 		{
 			name: "registered twice",
 			modules: []config.Module{
-				testModule("golang", func() config.ModuleConfig { return &golangConfig{} }),
-				testModule("golang", func() config.ModuleConfig { return &golangConfig{} }),
+				testModule("golang", newGolangConfig),
+				testModule("golang", newGolangConfig),
 			},
 			want: `module "golang" is registered more than once`,
 		},
@@ -447,16 +461,19 @@ func TestInvalidModules(t *testing.T) {
 			want:    "NewConfig must return a pointer to a struct",
 		},
 		{
-			name:    "no NewConfig",
-			modules: []config.Module{{Name: "golang", OS: []config.OS{config.Fedora}}},
-			want:    `module "golang" has no NewConfig`,
+			name:    "nil module",
+			modules: []config.Module{testModule("golang", newGolangConfig), nil},
+			want:    "module 1 is nil",
 		},
 		{
-			name: "no operating system",
-			modules: []config.Module{{Name: "golang", NewConfig: func() config.ModuleConfig {
-				return &golangConfig{}
-			}}},
-			want: `module "golang" supports no operating system`,
+			name:    "no name",
+			modules: []config.Module{testModule("", newGolangConfig)},
+			want:    "module 0 has no name",
+		},
+		{
+			name:    "no operating system",
+			modules: []config.Module{fakeModule{info: config.ModuleInfo{Name: "golang"}, newConfig: newGolangConfig}},
+			want:    `module "golang" supports no operating system`,
 		},
 	}
 	for _, tt := range tests {

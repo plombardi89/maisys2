@@ -3,12 +3,21 @@ package packages
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the packages module.
-var Module = config.Module{
-	Name:      "packages",
-	Summary:   "Installs and upgrades system packages with apt or dnf.",
-	OS:        config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig { return &Config{} },
+// Module is the packages module.
+type Module struct{}
+
+// Info describes the packages module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "packages",
+		Summary: "Installs and upgrades system packages with apt or dnf.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the packages module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{}
 }
 
 // Config is the packages module's config.

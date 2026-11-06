@@ -3,12 +3,21 @@ package files
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the files module.
-var Module = config.Module{
-	Name:      "files",
-	Summary:   "Copies files, directories and templates from the config repo into your home folder, and reports files changed since.",
-	OS:        config.AllOS(),
-	NewConfig: func() config.ModuleConfig { return &Config{} },
+// Module is the files module.
+type Module struct{}
+
+// Info describes the files module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "files",
+		Summary: "Copies files, directories and templates from the config repo into your home folder, and reports files changed since.",
+		OS:      config.AllOS(),
+	}
+}
+
+// NewConfig returns the files module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{}
 }
 
 // Config is the files module's config.

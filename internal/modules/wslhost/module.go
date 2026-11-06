@@ -3,12 +3,21 @@ package wslhost
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the wsl_host module.
-var Module = config.Module{
-	Name:      "wsl_host",
-	Summary:   "Installs and updates WSL, writes .wslconfig, and creates and sets up distros.",
-	OS:        []config.OS{config.Windows},
-	NewConfig: func() config.ModuleConfig { return &Config{} },
+// Module is the wsl_host module.
+type Module struct{}
+
+// Info describes the wsl_host module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "wsl_host",
+		Summary: "Installs and updates WSL, writes .wslconfig, and creates and sets up distros.",
+		OS:      []config.OS{config.Windows},
+	}
+}
+
+// NewConfig returns the wsl_host module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{}
 }
 
 // Config is the wsl_host module's config.

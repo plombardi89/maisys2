@@ -70,7 +70,7 @@ func TestModules(t *testing.T) {
 	all := modules.All()
 	var names []string
 	for _, mod := range all {
-		names = append(names, mod.Name)
+		names = append(names, mod.Info().Name)
 	}
 	var wantNames []string
 	for _, w := range want {
@@ -83,17 +83,18 @@ func TestModules(t *testing.T) {
 	for i, w := range want {
 		mod := all[i]
 		t.Run(w.name, func(t *testing.T) {
-			if !slices.Equal(mod.OS, w.os) {
-				t.Errorf("OS = %v, want %v", mod.OS, w.os)
+			info := mod.Info()
+			if !slices.Equal(info.OS, w.os) {
+				t.Errorf("OS = %v, want %v", info.OS, w.os)
 			}
-			if !slices.Equal(mod.Arch, w.arch) {
-				t.Errorf("Arch = %v, want %v", mod.Arch, w.arch)
+			if !slices.Equal(info.Arch, w.arch) {
+				t.Errorf("Arch = %v, want %v", info.Arch, w.arch)
 			}
-			if mod.Hidden != w.hidden {
-				t.Errorf("Hidden = %v, want %v", mod.Hidden, w.hidden)
+			if info.Hidden != w.hidden {
+				t.Errorf("Hidden = %v, want %v", info.Hidden, w.hidden)
 			}
-			if !strings.HasSuffix(mod.Summary, ".") {
-				t.Errorf("Summary = %q, want a sentence", mod.Summary)
+			if !strings.HasSuffix(info.Summary, ".") {
+				t.Errorf("Summary = %q, want a sentence", info.Summary)
 			}
 
 			cfg := mod.NewConfig()
@@ -169,8 +170,9 @@ func TestEmptyMachine(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, mod := range modules.All() {
-				if got, want := m.Modules[mod.Name], mod.NewConfig(); !reflect.DeepEqual(got, want) {
-					t.Errorf("%s = %+v, want the defaults %+v", mod.Name, got, want)
+				name := mod.Info().Name
+				if got, want := m.Modules[name], mod.NewConfig(); !reflect.DeepEqual(got, want) {
+					t.Errorf("%s = %+v, want the defaults %+v", name, got, want)
 				}
 			}
 		})
@@ -339,12 +341,13 @@ func TestExample(t *testing.T) {
 				t.Errorf("ProfileOS = %v, want %v", m.ProfileOS, tt.profileOS)
 			}
 			for _, mod := range modules.All() {
-				want, ok := tt.modules[mod.Name]
+				name := mod.Info().Name
+				want, ok := tt.modules[name]
 				if !ok {
 					want = mod.NewConfig()
 				}
-				if got := m.Modules[mod.Name]; !reflect.DeepEqual(got, want) {
-					t.Errorf("%s:\n got %+v\nwant %+v", mod.Name, got, want)
+				if got := m.Modules[name]; !reflect.DeepEqual(got, want) {
+					t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 				}
 			}
 			for path, want := range tt.origins {

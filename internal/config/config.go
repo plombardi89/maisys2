@@ -32,9 +32,19 @@ const (
 	ARM64 Arch = "arm64"
 )
 
-// Module describes one module to the loader, and to the generated docs and
-// config init.
-type Module struct {
+// Module is a module's configuration side: what it is, and its config
+// struct.
+type Module interface {
+	// Info describes the module.
+	Info() ModuleInfo
+	// NewConfig returns a pointer to a new config struct holding the
+	// module's defaults.
+	NewConfig() ModuleConfig
+}
+
+// ModuleInfo describes a module to the loader, and to the generated docs
+// and config init.
+type ModuleInfo struct {
 	// Name is the module's table in config files, for example "golang".
 	Name string
 	// Summary describes what the module does, in one sentence.
@@ -46,9 +56,6 @@ type Module struct {
 	Arch []Arch
 	// Hidden modules are left out of the generated docs and config init.
 	Hidden bool
-	// NewConfig returns a pointer to a new config struct holding the
-	// module's defaults.
-	NewConfig func() ModuleConfig
 }
 
 // ModuleConfig is a module's config struct. Every one embeds Toggle.

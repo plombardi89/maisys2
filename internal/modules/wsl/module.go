@@ -3,14 +3,21 @@ package wsl
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the wsl module.
-var Module = config.Module{
-	Name:    "wsl",
-	Summary: "Sets up a Linux distro running in WSL: /etc/wsl.conf, opening links in Windows, and optionally the Windows Git Credential Manager.",
-	OS:      config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig {
-		return &Config{Systemd: true, WSLG: true, AppendWindowsPath: true}
-	},
+// Module is the wsl module.
+type Module struct{}
+
+// Info describes the wsl module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "wsl",
+		Summary: "Sets up a Linux distro running in WSL: /etc/wsl.conf, opening links in Windows, and optionally the Windows Git Credential Manager.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the wsl module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{Systemd: true, WSLG: true, AppendWindowsPath: true}
 }
 
 // Config is the wsl module's config. Changes to /etc/wsl.conf take effect

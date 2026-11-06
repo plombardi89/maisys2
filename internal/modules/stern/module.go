@@ -3,14 +3,21 @@ package stern
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the stern module.
-var Module = config.Module{
-	Name:    "stern",
-	Summary: "Installs stern, which tails logs from Kubernetes pods.",
-	OS:      config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig {
-		return &Config{Version: config.Latest}
-	},
+// Module is the stern module.
+type Module struct{}
+
+// Info describes the stern module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "stern",
+		Summary: "Installs stern, which tails logs from Kubernetes pods.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the stern module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{Version: config.Latest}
 }
 
 // Config is the stern module's config.

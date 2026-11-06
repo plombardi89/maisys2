@@ -10,6 +10,8 @@ import (
 // named by moduleField.
 type schema struct {
 	machine, profile reflect.Type
+	// names holds each module's name, in the order modules were given.
+	names []string
 }
 
 func moduleField(i int) string {
@@ -28,20 +30,26 @@ func newSchema(modules []Module) (*schema, error) {
 	}
 	reserved := map[string]bool{"profiles": true, "os": true, "os_version": true, "arch": true}
 
+	names := make([]string, 0, len(modules))
 	seen := map[string]bool{}
 	for i, mod := range modules {
-		name := mod.Name
+		if mod == nil {
+			return nil, fmt.Errorf("module %d is nil", i)
+		}
+		info := mod.Info()
+		name := info.Name
 		switch {
+		case name == "":
+			return nil, fmt.Errorf("module %d has no name", i)
 		case reserved[name]:
 			return nil, fmt.Errorf("module name %q is a reserved key", name)
 		case seen[name]:
 			return nil, fmt.Errorf("module %q is registered more than once", name)
-		case mod.NewConfig == nil:
-			return nil, fmt.Errorf("module %q has no NewConfig", name)
-		case len(mod.OS) == 0:
+		case len(info.OS) == 0:
 			return nil, fmt.Errorf("module %q supports no operating system", name)
 		}
 		seen[name] = true
+		names = append(names, name)
 
 		t := reflect.TypeOf(mod.NewConfig())
 		if t == nil || t.Kind() != reflect.Pointer || t.Elem().Kind() != reflect.Struct {
@@ -61,6 +69,7 @@ func newSchema(modules []Module) (*schema, error) {
 	return &schema{
 		machine: reflect.StructOf(machineFields),
 		profile: reflect.StructOf(profileFields),
+		names:   names,
 	}, nil
 }
 

@@ -3,20 +3,27 @@ package shell
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the shell module.
-var Module = config.Module{
-	Name:    "shell",
-	Summary: "Installs bash, zsh and fish, sets the login shell, writes each shell's environment and rc files, and manages oh-my-zsh.",
-	OS:      config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig {
-		return &Config{
-			Bash: Bash{ManageRC: true},
-			Zsh: Zsh{
-				ManageRC: true,
-				OhMyZsh:  OhMyZsh{Ref: "master", Theme: "robbyrussell"},
-			},
-		}
-	},
+// Module is the shell module.
+type Module struct{}
+
+// Info describes the shell module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "shell",
+		Summary: "Installs bash, zsh and fish, sets the login shell, writes each shell's environment and rc files, and manages oh-my-zsh.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the shell module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{
+		Bash: Bash{ManageRC: true},
+		Zsh: Zsh{
+			ManageRC: true,
+			OhMyZsh:  OhMyZsh{Ref: "master", Theme: "robbyrussell"},
+		},
+	}
 }
 
 // Config is the shell module's config. Shells are off unless enabled.

@@ -3,12 +3,21 @@ package podman
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the podman module.
-var Module = config.Module{
-	Name:      "podman",
-	Summary:   "Installs Podman, plus iptables-nft on Fedora.",
-	OS:        config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig { return &Config{} },
+// Module is the podman module.
+type Module struct{}
+
+// Info describes the podman module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "podman",
+		Summary: "Installs Podman, plus iptables-nft on Fedora.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the podman module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{}
 }
 
 // Config is the podman module's config.

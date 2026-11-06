@@ -3,12 +3,21 @@ package sudo
 
 import "github.com/plombardi89/maisys2/internal/config"
 
-// Module describes the sudo module.
-var Module = config.Module{
-	Name:      "sudo",
-	Summary:   "Lets your user run sudo without a password.",
-	OS:        config.LinuxOS(),
-	NewConfig: func() config.ModuleConfig { return &Config{} },
+// Module is the sudo module.
+type Module struct{}
+
+// Info describes the sudo module.
+func (Module) Info() config.ModuleInfo {
+	return config.ModuleInfo{
+		Name:    "sudo",
+		Summary: "Lets your user run sudo without a password.",
+		OS:      config.LinuxOS(),
+	}
+}
+
+// NewConfig returns the sudo module's defaults.
+func (Module) NewConfig() config.ModuleConfig {
+	return &Config{}
 }
 
 // Config is the sudo module's config.
