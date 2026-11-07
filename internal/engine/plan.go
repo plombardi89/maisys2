@@ -3,8 +3,9 @@
 // ever asking for a password, and finds the records in the state file that
 // are no longer wanted. Applying it makes the changes module by module, in
 // dependency order, saving the state file after every step: a module that
-// fails only stops the modules that depend on it. Then it removes what was
-// taken out of the config, following the removal rules.
+// fails only stops the modules that depend on it. Changes of a group, such
+// as package installs, are applied together in one step. Then it removes
+// what was taken out of the config, following the removal rules.
 package engine
 
 import (

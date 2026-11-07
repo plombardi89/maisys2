@@ -17,6 +17,7 @@ import (
 	"github.com/plombardi89/maisys2/internal/engine"
 	"github.com/plombardi89/maisys2/internal/facts"
 	"github.com/plombardi89/maisys2/internal/gitrepo"
+	"github.com/plombardi89/maisys2/internal/resource/pkg"
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/state"
 	"github.com/plombardi89/maisys2/internal/system"
@@ -286,11 +287,12 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 	if s.g.verbose {
 		opts.Verbose = errOut
 	}
+	runner := s.g.newRunner(opts)
 	p, err := engine.NewPlan(ctx, engine.PlanInput{
 		Machine:  s.cfg,
 		Facts:    sys,
 		Paths:    s.paths,
-		Runner:   s.g.newRunner(opts),
+		Runner:   runner,
 		State:    store.State,
 		Modules:  s.repo.Modules,
 		Removers: s.g.removers,
@@ -328,7 +330,7 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 	if err := s.saveSettings(); err != nil {
 		return err
 	}
-	return s.apply(p, store, log)
+	return s.apply(p, store, log, runner, sys)
 }
 
 // logHeader returns the top of the run's log.
@@ -375,10 +377,11 @@ func (s *syncRun) confirm() (bool, error) {
 }
 
 // apply applies the plan p, which saves the state file after every step,
-// and shows what happened. A plan with nothing to change is applied too,
-// which records the sync and forgets things that are already gone, but
-// quietly, unless something failed.
-func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log) error {
+// and shows what happened, including whether the live system sys
+// recommends a reboot, which it asks with runner. A plan with nothing to
+// change is applied too, which records the sync and forgets things that
+// are already gone, but quietly, unless something failed.
+func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log, runner system.Runner, sys *facts.System) error {
 	ctx, out := s.cmd.Context(), s.cmd.OutOrStdout()
 	changes := p.HasChanges()
 	progress := &countingWriter{w: out}
@@ -404,6 +407,9 @@ func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log) err
 		_, _ = fmt.Fprintln(out)
 	}
 	res.Render(out)
+	if changes && s.rebootRecommended(p, runner, sys, log) {
+		_, _ = fmt.Fprintln(io.MultiWriter(out, log), rebootNotice)
+	}
 	if failed(res) {
 		s.printLogPath(log)
 	}
@@ -411,6 +417,37 @@ func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log) err
 		return exitCodeError{code: code}
 	}
 	return nil
+}
+
+// rebootNotice is how a sync's summary says a reboot is recommended.
+const rebootNotice = "Reboot recommended: some upgraded packages only take effect after a restart."
+
+// rebootRecommended reports whether the live system sys recommends a reboot
+// after the plan p installed or upgraded packages, asking with runner. If
+// it can't tell, it says why in the log.
+func (s *syncRun) rebootRecommended(p *engine.Plan, runner system.Runner, sys *facts.System, log io.Writer) bool {
+	if !changesPackages(p) {
+		return false
+	}
+	reboot, err := pkg.RebootRecommended(s.cmd.Context(), runner, sys)
+	if err != nil {
+		_, _ = fmt.Fprintf(log, "couldn't tell whether a reboot is recommended: %v\n", err)
+		s.g.debugf(s.cmd.ErrOrStderr(), "couldn't tell whether a reboot is recommended: %v", err)
+	}
+	return reboot
+}
+
+// changesPackages reports whether the plan p installs or upgrades
+// packages.
+func changesPackages(p *engine.Plan) bool {
+	for _, m := range p.Modules {
+		if slices.ContainsFunc(m.Items, func(item *engine.Item) bool {
+			return item.Resource.Kind() == pkg.Kind && item.Change.Action.Applies()
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // watchInterrupts reports Ctrl-C while a plan is applied. The first, which
