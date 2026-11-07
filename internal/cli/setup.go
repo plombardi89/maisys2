@@ -26,11 +26,7 @@ var errNotSetUp = errors.New("this machine isn't set up for maisys yet: run `mai
 // one in the local settings, unless CONFIG-URL or --dir names another one
 // to switch to.
 func (s *syncRun) findRepo() error {
-	paths, err := settings.DefaultPaths(s.g.goos, s.g.getenv)
-	if err != nil {
-		return err
-	}
-	s.paths = paths
+	paths := s.paths
 	dir, err := s.g.absPath(s.opts.dir, paths.Home)
 	if err != nil {
 		return err
@@ -84,7 +80,7 @@ func (s *syncRun) findRepo() error {
 		}
 		return fmt.Errorf("%s: run `maisys sync --dir PATH` to use another clone", msg)
 	}
-	s.repo = &configRepo{Repo: newRepo(saved.RepoDir, saved.RepoURL), dir: saved.RepoDir, settings: saved}
+	s.repo = &configRepo{Repo: s.g.newRepo(saved.RepoDir, saved.RepoURL), dir: saved.RepoDir, settings: saved}
 	return nil
 }
 
@@ -130,7 +126,7 @@ func (s *syncRun) useClone(rawURL, dir string) error {
 		}
 	}
 
-	s.repo = &configRepo{Repo: newRepo(s.clone.Dir, repoURL), dir: s.clone.Dir}
+	s.repo = &configRepo{Repo: s.g.newRepo(s.clone.Dir, repoURL), dir: s.clone.Dir}
 	err = s.repo.checkMarker(errOut, s.warned)
 	if !errors.Is(err, config.ErrNotConfigRepo) {
 		return err
@@ -173,10 +169,12 @@ func existingClone(ctx context.Context, rawURL, dir string, opts gitrepo.Options
 		gitrepo.Redact(rawURL), dir, why)
 }
 
-// chooseMachine selects the machine, and saves the local settings if this
-// is the first run, the config repo has changed, or the machine has.
+// chooseMachine selects the machine, and works out the local settings to
+// save if this is the first run, the config repo has changed, or the
+// machine has (see saveSettings). A change of config repo or machine goes
+// into the plan's header.
 func (s *syncRun) chooseMachine() error {
-	out, errOut := s.cmd.OutOrStdout(), s.cmd.ErrOrStderr()
+	errOut := s.cmd.ErrOrStderr()
 	var old string
 	if s.saved != nil {
 		old = s.saved.Machine
@@ -200,34 +198,47 @@ func (s *syncRun) chooseMachine() error {
 	if s.saved != nil && !s.switched && !newMachine {
 		return nil
 	}
-	next := &settings.Settings{RepoDir: s.repo.dir, RepoURL: s.repo.URL, Machine: name}
-	if err := next.Save(s.paths.SettingsFile()); err != nil {
-		return err
-	}
-	s.repo.settings = next
-
+	s.pending = &settings.Settings{RepoDir: s.repo.dir, RepoURL: s.repo.URL, Machine: name}
+	s.machineSource = source
 	if s.saved == nil {
-		_, err := fmt.Fprintf(out, "maisys: set up this machine as %s (from %s), with the config repo %s\n", name, source, s.describeSetup())
-		return err
+		return nil
 	}
 	if s.switched {
 		from, to := describeRepo(s.saved.RepoURL, s.saved.RepoDir), describeRepo(s.repo.URL, s.repo.dir)
 		if from == to {
 			from, to = s.saved.RepoDir, s.repo.dir
 		}
-		if _, err := fmt.Fprintf(out, "maisys: config repo: %s → %s\n", from, to); err != nil {
-			return err
-		}
+		s.header = append(s.header, fmt.Sprintf("config repo: %s → %s", from, to))
 	}
 	switch {
 	case name == old:
-		return nil
 	case old == "":
-		_, err = fmt.Fprintf(out, "maisys: machine: %s (from %s)\n", name, source)
+		s.header = append(s.header, fmt.Sprintf("machine: %s (from %s)", name, source))
 	default:
-		_, err = fmt.Fprintf(out, "maisys: machine: %s (was %s)\n", name, old)
+		s.header = append(s.header, fmt.Sprintf("machine: %s (was %s)", name, old))
 	}
-	return err
+	return nil
+}
+
+// saveSettings saves the local settings chooseMachine worked out, if they
+// changed. On the first run that happens once the config has passed every
+// check, even with --dry-run, since it's maisys's own setup. A switch of
+// config repo or machine is part of the plan, so it's only saved when the
+// plan is applied.
+func (s *syncRun) saveSettings() error {
+	if s.pending == nil {
+		return nil
+	}
+	if err := s.pending.Save(s.paths.SettingsFile()); err != nil {
+		return err
+	}
+	s.repo.settings, s.pending = s.pending, nil
+	if s.saved == nil {
+		_, err := fmt.Fprintf(s.cmd.OutOrStdout(), "maisys: set up this machine as %s (from %s), with the config repo %s\n",
+			s.machine, s.machineSource, s.describeSetup())
+		return err
+	}
+	return nil
 }
 
 // describeSetup describes the config repo the first run set up.

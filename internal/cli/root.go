@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -18,12 +19,17 @@ import (
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/facts"
 	"github.com/plombardi89/maisys2/internal/gitrepo"
+	"github.com/plombardi89/maisys2/internal/modules"
+	"github.com/plombardi89/maisys2/internal/resource"
+	"github.com/plombardi89/maisys2/internal/system"
 )
 
 // Exit codes returned by Execute.
 const (
 	exitOK    = 0
 	exitError = 1
+	// exitChanges is sync --dry-run's exit code when the plan has changes.
+	exitChanges = 2
 )
 
 var errNotImplemented = errors.New("not implemented yet")
@@ -63,6 +69,22 @@ type environment struct {
 	// prompt asks for a config repo token in a terminal. It's nil when
 	// maisys can't ask questions.
 	prompt func(ctx context.Context, url string) (string, error)
+	// stdoutTerminal reports whether stdout is a terminal, where the plan
+	// can be in colour.
+	stdoutTerminal func() bool
+	// abort is closed on a second Ctrl-C, after the first has cancelled
+	// the command's context: sync then stops the step in progress too. It
+	// may be nil.
+	abort <-chan struct{}
+	// now returns the current time.
+	now func() time.Time
+	// modules are every module maisys has (modules.All()).
+	modules []config.Module
+	// removers remove what's taken out of the config, by kind.
+	removers resource.Removers
+	// newRunner returns the runner for a sync's commands
+	// (system.NewRunner).
+	newRunner func(opts system.Options) system.Runner
 }
 
 // globalOptions holds settings that apply to every command, and the
@@ -112,14 +134,23 @@ func (g *globalOptions) liveSystem() (*facts.System, error) {
 }
 
 // Execute runs the maisys command line with args (without the program name)
-// and returns the process exit code.
-func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
-	terminal := isTerminal(os.Stdin) && isTerminal(stdout)
+// and returns the process exit code. Cancelling ctx, as the first Ctrl-C
+// does, stops maisys after the step in progress; closing abort, as a second
+// Ctrl-C does, stops that step too.
+func Execute(ctx context.Context, abort <-chan struct{}, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return execute(ctx, args, processEnvironment(abort, stdout, stderr, getenv))
+}
+
+// processEnvironment returns the environment of the maisys process, with
+// stdout, stderr and getenv for its streams and environment variables.
+func processEnvironment(abort <-chan struct{}, stdout, stderr io.Writer, getenv func(string) string) *environment {
+	outTerminal := isTerminal(stdout)
+	terminal := isTerminal(os.Stdin) && outTerminal
 	var prompt func(ctx context.Context, url string) (string, error)
 	if terminal {
 		prompt = gitrepo.TerminalPrompt(os.Stdin, stdout)
 	}
-	return execute(ctx, args, &environment{
+	return &environment{
 		stdin:  os.Stdin,
 		stdout: stdout,
 		stderr: stderr,
@@ -132,7 +163,16 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, geten
 		goos:    runtime.GOOS,
 		findGit: gitrepo.Find,
 		prompt:  prompt,
-	})
+		stdoutTerminal: func() bool {
+			return outTerminal
+		},
+		abort:   abort,
+		now:     time.Now,
+		modules: modules.All(),
+		newRunner: func(opts system.Options) system.Runner {
+			return system.NewRunner(opts)
+		},
+	}
 }
 
 // isTerminal reports whether f, a stream, is a terminal.

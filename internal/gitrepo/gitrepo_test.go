@@ -403,6 +403,26 @@ func TestRemoteURL(t *testing.T) {
 	}
 }
 
+func TestHead(t *testing.T) {
+	sb := newSandbox(t)
+	r, err := Init(t.Context(), filepath.Join(t.TempDir(), "config"), sb.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Head(t.Context()); err != nil || got != "" {
+		t.Errorf("Head() without commits = %q, %v; want nothing", got, err)
+	}
+
+	writeFile(t, filepath.Join(r.Dir, "maisys.toml"), "config_version = 1\n")
+	if err := r.CommitAll(t.Context(), "Create the config repo"); err != nil {
+		t.Fatal(err)
+	}
+	want := sb.git(r.Dir, "rev-parse", "--short", "HEAD")
+	if got, err := r.Head(t.Context()); err != nil || got != want {
+		t.Errorf("Head() = %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestCommitAllAndPush(t *testing.T) {
 	sb := newSandbox(t)
 	r, err := Init(t.Context(), filepath.Join(t.TempDir(), "config"), sb.opts)

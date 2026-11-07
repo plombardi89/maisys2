@@ -1,0 +1,16 @@
+Plan for phil-workp14s (ubuntu 26.04, amd64)
+
+packages
+  + install jq                                  [sudo]
+golang
+  error: checking go-install gopls: go version -m failed with exit code 1:
+      gopls: not a Go binary
+      check the file
+mage (skipped because golang failed)
+kubectl
+  error: couldn't find the latest kubectl at https://dl.k8s.io/release/stable.txt: 503 Service Unavailable
+prune
+  error: checking the removal of tool stern: permission denied
+
+1 to change. Needs sudo.
+golang and kubectl failed, so they won't be applied. 1 removal couldn't be checked, so it won't be applied.
