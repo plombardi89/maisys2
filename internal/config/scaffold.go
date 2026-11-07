@@ -294,6 +294,10 @@ const scaffoldReadme = "# maisys config\n\n" +
 	"  ```sh\n" +
 	"  curl -fsSL https://github.com/{repo}/releases/latest/download/install.sh | bash -s -- CONFIG-URL\n" +
 	"  ```\n\n" +
+	"  On Windows 11, in PowerShell as your normal user:\n\n" +
+	"  ```powershell\n" +
+	"  iex \"& { $(irm https://github.com/{repo}/releases/latest/download/install.ps1) } CONFIG-URL\"\n" +
+	"  ```\n\n" +
 	"  With maisys already installed, run `maisys sync CONFIG-URL`.\n" +
 	"- **Changing the config:** edit the files, and check them with\n" +
 	"  `maisys config validate --all`. `maisys sync --dry-run` shows what a sync\n" +
