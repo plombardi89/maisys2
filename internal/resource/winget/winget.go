@@ -88,6 +88,18 @@ type Package struct {
 	// checked reports whether Check ran on this value, and upgrade
 	// whether it found the package installed, with an upgrade.
 	checked, upgrade bool
+	// reboot says why Windows must restart after the last Apply, if it
+	// must.
+	reboot string
+}
+
+var _ resource.RebootNeeder = (*Package)(nil)
+
+// RebootNeeded reports whether winget said Windows must restart, before or
+// after the last Apply's install. The next sync, after the restart, checks
+// the package again and finishes the install if it has to.
+func (p *Package) RebootNeeded() (why string, needed bool) {
+	return p.reboot, p.reboot != ""
 }
 
 var _ resource.Resource = (*Package)(nil)
@@ -185,10 +197,16 @@ func (p *Package) Apply(ctx context.Context, rt *resource.Runtime) (state.Record
 	if err != nil {
 		return state.Record{}, err
 	}
+	p.reboot = ""
 	if p.upgrade {
 		err = m.upgrade(ctx, p.spec)
 	} else {
 		err = m.install(ctx, p.spec)
+	}
+	if reboot, ok := errors.AsType[*RebootError](err); ok {
+		// Not a failure: the sync stops for a restart (see RebootNeeded).
+		p.reboot = reboot.Error()
+		return rec, nil
 	}
 	if err != nil {
 		return state.Record{}, err
