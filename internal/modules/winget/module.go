@@ -1,7 +1,12 @@
 // Package winget is the winget module.
 package winget
 
-import "github.com/plombardi89/maisys2/internal/config"
+import (
+	"strings"
+
+	"github.com/plombardi89/maisys2/internal/config"
+	wingetpkg "github.com/plombardi89/maisys2/internal/resource/winget"
+)
 
 // Module is the winget module.
 type Module struct{}
@@ -23,15 +28,23 @@ func (Module) NewConfig() config.ModuleConfig {
 // Config is the winget module's config.
 type Config struct {
 	config.Toggle
-	// Install lists winget package IDs, such as
-	// "Microsoft.WindowsTerminal". Packages taken off the list aren't
-	// uninstalled. Git.Git is always installed, because maisys needs it.
+	// Install lists packages from the winget source by their exact,
+	// case-sensitive ID, such as "Microsoft.WindowsTerminal" (winget
+	// search finds them). Each is kept at its latest version, and installed
+	// as you: an installer that needs admin rights asks for them. Packages
+	// taken off the list aren't uninstalled. Git.Git is always installed,
+	// system-wide, because maisys needs it.
 	Install []string `toml:"install" merge:"union"`
 }
 
 var _ config.Checker = (*Config)(nil)
 
-// Check checks that install has no empty entries.
+// Check checks that install lists only winget package IDs.
 func (c *Config) Check(check *config.Check) {
 	check.NoEmptyItems("install", c.Install)
+	for _, id := range c.Install {
+		if strings.TrimSpace(id) != "" && !wingetpkg.ValidID(id) {
+			check.ItemErrorf("install", id, "lists %q, which isn't a winget package ID, such as \"Microsoft.WindowsTerminal\"", id)
+		}
+	}
 }

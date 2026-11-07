@@ -52,8 +52,10 @@ type Call struct {
 // instead of running them, and records every command it's asked to run. It
 // models the sudo session: until StartSudo, a command to run as root runs
 // only if SudoStatus is system.SudoNoPassword, and otherwise fails as the
-// real runner's would, without asking for a password. A command no handler
-// matches fails the test. It's safe for concurrent use.
+// real runner's would, without asking for a password. On Windows, the
+// session it models is the elevated helper, and SudoNoPassword means maisys
+// is elevated. A command no handler matches fails the test. It's safe for
+// concurrent use.
 type FakeRunner struct {
 	// SudoStatus is what CheckSudo reports. Empty means
 	// system.SudoNoPassword.
@@ -62,7 +64,9 @@ type FakeRunner struct {
 	// the wrong password.
 	StartErr error
 	// OS and User go into the *system.SudoError for a missing sudo or a
-	// user who may not use it.
+	// user who may not use it. With OS config.Windows, a command to run as
+	// admin outside the session fails with system.ErrNeedsAdmin, as the
+	// real runner's does there.
 	OS   config.OS
 	User string
 
@@ -239,6 +243,9 @@ func (f *FakeRunner) status() system.SudoStatus {
 // nil if it can. f.mu must be held.
 func (f *FakeRunner) rootError() error {
 	if f.status() == system.SudoNeedsPassword {
+		if f.OS == config.Windows {
+			return system.ErrNeedsAdmin
+		}
 		return system.ErrNeedsPassword
 	}
 	return f.sudoError()

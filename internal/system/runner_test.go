@@ -157,6 +157,34 @@ func TestRunLog(t *testing.T) {
 	}
 }
 
+// TestRunStream checks that a command's output also goes to its Stream as
+// it runs, and is still captured and logged, but isn't shown twice with
+// Verbose.
+func TestRunStream(t *testing.T) {
+	var log, verbose, stream bytes.Buffer
+	r := NewRunner(Options{Log: &log, Verbose: &verbose})
+	c := helperCmd(t, "exit", "0", "first\nno newline", "an error\n")
+	c.Stream = &stream
+	res, err := r.Run(t.Context(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first\n", "no newline\n", "an error\n"} {
+		if !strings.Contains(stream.String(), want) {
+			t.Errorf("stream doesn't contain the line %q:\n%s", want, stream.String())
+		}
+	}
+	if string(res.Stdout) != "first\nno newline" || string(res.Stderr) != "an error\n" {
+		t.Errorf("Stdout, Stderr = %q, %q; want them captured too", res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(log.String(), "an error\n") {
+		t.Errorf("log doesn't have the output:\n%s", log.String())
+	}
+	if want := "$ " + c.String() + "\n"; verbose.String() != want {
+		t.Errorf("verbose output = %q, want only the command line %q", verbose.String(), want)
+	}
+}
+
 // TestRunConcurrent runs commands at the same time, checking that each
 // one's entry in the log is in one piece.
 func TestRunConcurrent(t *testing.T) {
@@ -265,21 +293,43 @@ func TestCmdString(t *testing.T) {
 	}
 }
 
-func TestNoSudoOnWindows(t *testing.T) {
+// TestAdminOnWindows checks that the runner on Windows runs commands as
+// admin through its admin session rather than sudo: directly if the tests
+// run elevated, as on CI, and otherwise not until the elevated helper is
+// started, which this test never does, as it would show a UAC prompt.
+func TestAdminOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("maisys uses sudo everywhere but Windows")
 	}
 	r := NewRunner(Options{})
-	if _, err := r.Run(t.Context(), Cmd{Name: "whoami", Root: true}); err == nil || !strings.Contains(err.Error(), "only uses on Linux") {
-		t.Errorf("Run() as root: error = %v, want one saying sudo is only used on Linux", err)
+	if r.admin == nil {
+		t.Fatal("the runner has no admin session")
 	}
-	if _, err := r.CheckSudo(t.Context()); !errors.Is(err, errNoSudo) {
-		t.Errorf("CheckSudo() error = %v, want errNoSudo", err)
+	c := helperCmd(t, "exit", "0", "as admin", "")
+	c.Root = true
+	status, err := r.CheckSudo(t.Context())
+	if err != nil {
+		t.Fatalf("CheckSudo() error = %v", err)
 	}
-	if err := r.StartSudo(t.Context()); !errors.Is(err, errNoSudo) {
-		t.Errorf("StartSudo() error = %v, want errNoSudo", err)
+	if r.admin.elevated {
+		if status != SudoNoPassword {
+			t.Errorf("CheckSudo() elevated = %q, want SudoNoPassword", status)
+		}
+		if res, err := r.Run(t.Context(), c); err != nil || string(res.Stdout) != "as admin" {
+			t.Errorf("Run() as admin, elevated = %+v, %v; want it run directly", res, err)
+		}
+		if err := r.StartSudo(t.Context()); err != nil {
+			t.Errorf("StartSudo() elevated: error = %v", err)
+		}
+		r.StopSudo()
+	} else {
+		if status != SudoNeedsPassword {
+			t.Errorf("CheckSudo() unelevated = %q, want SudoNeedsPassword", status)
+		}
+		if _, err := r.Run(t.Context(), c); !errors.Is(err, ErrNeedsAdmin) {
+			t.Errorf("Run() as admin, unelevated: error = %v, want ErrNeedsAdmin", err)
+		}
 	}
-	r.StopSudo()
 	if err := InstallFile(t.Context(), r, []byte("x"), `C:\x`, 0o644); !errors.Is(err, errNoSudo) {
 		t.Errorf("InstallFile() error = %v, want errNoSudo", err)
 	}

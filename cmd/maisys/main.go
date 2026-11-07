@@ -9,11 +9,14 @@ import (
 
 	"github.com/plombardi89/maisys2/internal/cli"
 	"github.com/plombardi89/maisys2/internal/selfupdate"
+	"github.com/plombardi89/maisys2/internal/system"
 )
 
 func main() {
-	if runtime.GOOS == "windows" {
-		// Delete the binary an earlier self-update moved aside.
+	// Delete the binary an earlier self-update moved aside, unless this is
+	// the elevated helper, which leaves the user's files alone: it may run
+	// as another user.
+	if runtime.GOOS == "windows" && !isHelper(os.Args[1:]) {
 		if exe, err := selfupdate.Executable(); err == nil {
 			selfupdate.RemoveOld(exe)
 		}
@@ -26,6 +29,12 @@ func main() {
 	stop()
 	cancel()
 	os.Exit(code)
+}
+
+// isHelper reports whether args, the command line without the program name,
+// run the elevated helper.
+func isHelper(args []string) bool {
+	return len(args) > 0 && args[0] == system.HelperCommand
 }
 
 // handleInterrupts calls cancel on the first Ctrl-C, so maisys stops after

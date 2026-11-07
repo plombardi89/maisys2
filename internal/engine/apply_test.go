@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -99,7 +100,8 @@ func TestApplySudo(t *testing.T) {
 		{name: "none", privileged: []bool{false, false}},
 		{name: "one", privileged: []bool{false, true, false}, wantStarts: 1},
 		{name: "several", privileged: []bool{true, false, true, true}, wantStarts: 1},
-		{name: "windows", privileged: []bool{true}, windows: true},
+		{name: "windows", privileged: []bool{false, true, true}, windows: true, wantStarts: 1},
+		{name: "windows without admin", privileged: []bool{false, false}, windows: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,12 +114,9 @@ func TestApplySudo(t *testing.T) {
 			for i, privileged := range tt.privileged {
 				r := res("fake:"+string(rune('a'+i)), resource.Create, "")
 				r.privileged = privileged
-				// Windows has no sudo: its elevated helper comes later.
-				if !tt.windows {
-					r.onApply = func(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
-						_, err := rt.Runner.Run(ctx, system.Cmd{Name: "touch", Args: []string{r.id}, Root: privileged})
-						return state.Record{}, err
-					}
+				r.onApply = func(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
+					_, err := rt.Runner.Run(ctx, system.Cmd{Name: "touch", Args: []string{r.id}, Root: privileged})
+					return state.Record{}, err
 				}
 				e.add("module"+string(rune('a'+i%2)), nil, r)
 			}
@@ -133,7 +132,7 @@ func TestApplySudo(t *testing.T) {
 			}
 			for _, c := range e.runner.Calls() {
 				if c.Cmd.Root && !c.InSession {
-					t.Errorf("%s ran as root outside the sudo session", c.Cmd)
+					t.Errorf("%s ran as root outside the sudo session (on Windows, the elevated helper)", c.Cmd)
 				}
 			}
 			if _, err := e.runner.Run(t.Context(), system.Cmd{Name: "touch", Root: true}); !errors.Is(err, system.ErrNeedsPassword) {
@@ -167,6 +166,144 @@ func TestApplySudoFails(t *testing.T) {
 	}
 	if n := e.runner.SudoStarts(); n != 1 {
 		t.Errorf("sudo was started %d times, want once", n)
+	}
+}
+
+// rebootResource is a fake resource that, if needed is set, needs a reboot
+// once it's applied.
+type rebootResource struct {
+	*fakeResource
+	why     string
+	needed  bool
+	applied bool
+}
+
+func (r *rebootResource) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
+	rec, err := r.fakeResource.Apply(ctx, rt)
+	r.applied = err == nil
+	return rec, err
+}
+
+func (r *rebootResource) RebootNeeded() (string, bool) {
+	return r.why, r.needed && r.applied
+}
+
+// TestApplyReboot checks that a change that needs a reboot stops its
+// module and the modules that depend on it, without failing, and that
+// the rest of the sync carries on.
+func TestApplyReboot(t *testing.T) {
+	tests := []struct {
+		name      string
+		why       string
+		broken    bool // whether another module fails too
+		wantSteps []string
+		wantOut   string
+		wantCode  int
+		wantState state.Result
+	}{
+		{
+			name: "reboot",
+			why:  "WSL was installed",
+			wantSteps: []string{
+				"apply winget:jq", "apply wsl:install", "apply file:~/.vimrc", "remove file:~/old",
+			},
+			wantOut: "Applied 3 changes and 1 removal.\n" +
+				"wsl_host needs a reboot before it can carry on: WSL was installed.\n" +
+				"windows_terminal waits for the reboot.\n" +
+				"Didn't remove distro-setup old yet: it waits for the reboot.\n" +
+				"Reboot, then run `maisys sync` again to finish.\n",
+			wantState: state.ResultInterrupted,
+		},
+		{
+			name: "reboot without a reason",
+			wantSteps: []string{
+				"apply winget:jq", "apply wsl:install", "apply file:~/.vimrc", "remove file:~/old",
+			},
+			wantOut: "Applied 3 changes and 1 removal.\n" +
+				"wsl_host needs a reboot before it can carry on: wsl install was applied.\n" +
+				"windows_terminal waits for the reboot.\n" +
+				"Didn't remove distro-setup old yet: it waits for the reboot.\n" +
+				"Reboot, then run `maisys sync` again to finish.\n",
+			wantState: state.ResultInterrupted,
+		},
+		{
+			name:      "reboot and a failure",
+			why:       "WSL was installed",
+			broken:    true,
+			wantSteps: []string{"apply winget:jq", "apply wsl:install", "apply file:~/.vimrc"},
+			wantOut: "Applied 2 changes.\n" +
+				"wsl_host needs a reboot before it can carry on: WSL was installed.\n" +
+				"windows_terminal waits for the reboot.\n" +
+				"files failed: ~/.vimrc: disk full\n" +
+				"Didn't remove file ~/old because files failed.\n" +
+				"Didn't remove distro-setup old yet: it waits for the reboot.\n" +
+				"Reboot, then run `maisys sync` again to finish.\n",
+			wantCode:  1,
+			wantState: state.ResultFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.windows()
+			e.add("winget", nil, res("winget:jq", resource.Create, "install jq"))
+			install := &rebootResource{fakeResource: res("wsl:install", resource.Create, "").sudo().mayReboot(), why: tt.why, needed: true}
+			install.steps = e.steps
+			wsl := e.add("wsl_host", nil)
+			wsl.resources = append(wsl.resources, install)
+			e.add("wsl_host", nil, res("distro:dev", resource.Create, "create distro dev"))
+			e.add("windows_terminal", []string{"wsl_host"}, res("terminal:default-profile", resource.Update, "default profile → dev"))
+			vimrc := res("file:~/.vimrc", resource.Create, "~/.vimrc")
+			if tt.broken {
+				vimrc.applyErr = errors.New("disk full")
+			}
+			e.add("files", nil, vimrc)
+			e.record("distro-setup:old", "fake", "wsl_host")
+			e.record("file:~/old", "fake", "files")
+			e.remover(&fakeRemover{kind: "fake", change: resource.Change{Action: resource.Remove}})
+
+			result := e.apply(t.Context())
+			if got := e.steps.get(); !slices.Equal(got, tt.wantSteps) {
+				t.Errorf("steps =\n%q\nwant\n%q", got, tt.wantSteps)
+			}
+			if !result.RebootNeeded() || result.OK() || result.ExitCode() != tt.wantCode {
+				t.Errorf("RebootNeeded(), OK(), ExitCode() = %t, %t, %d; want true, false, %d", result.RebootNeeded(), result.OK(), result.ExitCode(), tt.wantCode)
+			}
+			var b bytes.Buffer
+			result.Render(&b)
+			if b.String() != tt.wantOut {
+				t.Errorf("Render() =\n%s\nwant\n%s", b.String(), tt.wantOut)
+			}
+			if !slices.Contains(e.ids(), "wsl:install") || !slices.Contains(e.ids(), "distro-setup:old") {
+				t.Errorf("records = %q, want the change that needs a reboot recorded, and the removal that waits for it kept", e.ids())
+			}
+			if e.store.LastSyncResult != tt.wantState {
+				t.Errorf("LastSyncResult = %q, want %q", e.store.LastSyncResult, tt.wantState)
+			}
+			if n := e.runner.SudoStarts(); n != 1 {
+				t.Errorf("the elevated helper was started %d times, want once", n)
+			}
+		})
+	}
+}
+
+// TestApplyNoReboot checks that a resource that may need a reboot, but
+// doesn't, doesn't stop anything.
+func TestApplyNoReboot(t *testing.T) {
+	e := newTestEnv(t)
+	e.windows()
+	install := &rebootResource{fakeResource: res("wsl:install", resource.Update, "update WSL").sudo().mayReboot()}
+	install.steps = e.steps
+	wsl := e.add("wsl_host", nil)
+	wsl.resources = append(wsl.resources, install)
+	e.add("windows_terminal", []string{"wsl_host"}, res("terminal:default-profile", resource.Update, "default profile → dev"))
+
+	result := e.apply(t.Context())
+	if !result.OK() || result.RebootNeeded() || result.ExitCode() != 0 {
+		t.Errorf("OK(), RebootNeeded(), ExitCode() = %t, %t, %d; want true, false, 0", result.OK(), result.RebootNeeded(), result.ExitCode())
+	}
+	if got, want := e.steps.get(), []string{"apply wsl:install", "apply terminal:default-profile"}; !slices.Equal(got, want) {
+		t.Errorf("steps = %q, want %q", got, want)
 	}
 }
 
@@ -219,6 +356,66 @@ func TestApplyFailureIsolation(t *testing.T) {
 	}
 	if e.store.LastSyncResult != state.ResultFailed {
 		t.Errorf("LastSyncResult = %q, want %q", e.store.LastSyncResult, state.ResultFailed)
+	}
+}
+
+// TestApplyIndependentFailures checks that a resource that fails on its
+// own (resource.Independent), such as a WSL distro, makes its module fail
+// without stopping the module's other changes, and that steps can show
+// things on the terminal.
+func TestApplyIndependentFailures(t *testing.T) {
+	e := newTestEnv(t)
+	e.windows()
+	distro := func(name string, err error) *fakeResource {
+		r := res("wsl-distro:"+name, resource.Create, "create distro "+name)
+		r.independent, r.applyErr = true, err
+		return r
+	}
+	fedora := distro("fedora", nil)
+	fedora.onApply = func(_ context.Context, rt *resource.Runtime) (state.Record, error) {
+		_, _ = io.WriteString(rt.Out, "first sync in fedora\n")
+		return state.Record{}, nil
+	}
+	e.add("wsl_host", nil,
+		res("wsl", resource.NoChange, ""),
+		distro("broken", errors.New("wsl --install failed")),
+		fedora,
+		distro("ubuntu", errors.New("the first sync failed")),
+		res("wsl-default", resource.Update, "default distro → fedora"),
+	)
+	e.add("windows_terminal", []string{"wsl_host"}, res("terminal-profile", resource.Update, "default profile → fedora"))
+	e.add("files", nil, res("file:~/notes.txt", resource.Create, "~/notes.txt"))
+
+	var out bytes.Buffer
+	result := Apply(t.Context(), e.plan(), ApplyInput{Store: e.store, Out: &out})
+	want := []string{
+		"apply wsl-distro:broken",
+		"apply wsl-distro:fedora",
+		"apply wsl-distro:ubuntu",
+		"apply wsl-default",
+		"apply file:~/notes.txt",
+	}
+	if got := e.steps.get(); !slices.Equal(got, want) {
+		t.Errorf("steps =\n%q\nwant\n%q", got, want)
+	}
+	if out.String() != "first sync in fedora\n" {
+		t.Errorf("the terminal got %q, want what the fedora step wrote", out.String())
+	}
+
+	var b bytes.Buffer
+	result.Render(&b)
+	wantOut := "Applied 3 changes.\n" +
+		"wsl_host failed: create distro broken: wsl --install failed\n" +
+		"  create distro ubuntu: the first sync failed\n" +
+		"windows_terminal skipped because wsl_host failed.\n"
+	if b.String() != wantOut {
+		t.Errorf("Render() =\n%s\nwant\n%s", b.String(), wantOut)
+	}
+	if result.ExitCode() != 1 {
+		t.Errorf("ExitCode() = %d, want 1", result.ExitCode())
+	}
+	if got, want := e.ids(), []string{"file:~/notes.txt", "wsl-default", "wsl-distro:fedora"}; !slices.Equal(got, want) {
+		t.Errorf("records = %q, want %q", got, want)
 	}
 }
 
