@@ -430,6 +430,53 @@ fish.snippets = ["shell/fish/nope.fish"]
 `,
 		},
 		{
+			name: "shell: snippets copied to the same file",
+			machine: `
+os = "fedora"
+
+[shell]
+enabled = true
+
+[shell.zsh]
+enabled = true
+pre_snippets = ["shell/zsh/aliases.zsh"]
+snippets = ["shell/zsh/aliases.zsh", "aliases.zsh"]
+`,
+			want: []string{
+				`machines/box.toml:9:38: shell.zsh.snippets lists "aliases.zsh", which doesn't exist in the config repo`,
+				`machines/box.toml:9:38: shell.zsh.snippets lists "aliases.zsh", which would be copied to ~/.config/maisys/shell/zsh/aliases.zsh like "shell/zsh/aliases.zsh": move one of them`,
+			},
+		},
+		{
+			name: "shell: variables and oh-my-zsh names that aren't valid",
+			machine: `
+os = "fedora"
+
+[shell]
+enabled = true
+
+[shell.zsh]
+enabled = true
+variables = { OK_1 = "a", "NOT-OK" = "b", 1X = "c" }
+
+[shell.zsh.oh_my_zsh]
+enabled = true
+theme = "a theme"
+plugins = ["git", "$(id)"]
+custom_themes."../t" = { repo = "https://example.com/t", ref = "main", file = "../t.zsh-theme" }
+custom_plugins."p/q" = { repo = "https://example.com/p", ref = "main" }
+`,
+			want: []string{
+				`machines/box.toml:8:48: shell.zsh.variables.1X isn't a valid variable name: use letters, digits and underscores, not starting with a digit`,
+				`machines/box.toml:8:38: shell.zsh.variables.NOT-OK isn't a valid variable name: use letters, digits and underscores, not starting with a digit`,
+				`machines/box.toml:12:9: shell.zsh.oh_my_zsh.theme "a theme" isn't a valid theme name`,
+				`machines/box.toml:13:19: shell.zsh.oh_my_zsh.plugins lists "$(id)", which isn't a valid plugin name`,
+				`machines/box.toml:14:24: shell.zsh.oh_my_zsh.custom_themes."../t" has a name that isn't a valid theme name: use letters, digits, dots, dashes and underscores`,
+				`machines/box.toml:14:79: shell.zsh.oh_my_zsh.custom_themes."../t".file is "../t.zsh-theme", which isn't a path inside the theme's repo`,
+				`machines/box.toml:15:24: shell.zsh.oh_my_zsh.custom_plugins.p/q has a name that isn't a valid plugin name: use letters, digits, dots, dashes and underscores`,
+			},
+		},
+		{
 			name: "shell and files both write ~/.bashrc",
 			machine: `
 os = "fedora"

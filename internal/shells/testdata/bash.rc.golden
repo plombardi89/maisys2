@@ -1,0 +1,27 @@
+# Written by maisys from your config repo, as shell.bash.manage_rc is on. The
+# next sync backs up and replaces any changes made here: add your own
+# settings to the config repo as snippets instead.
+
+# The system's settings
+if [ -f "/etc/bashrc" ]; then
+	source "/etc/bashrc"
+fi
+
+# shell.bash.variables
+export EDITOR="nvim"
+export HIST_STAMPS="yyyy-mm-dd"
+
+# shell.bash.pre_snippets
+source "${HOME}/.config/maisys/shell/bash/first.bash"
+
+# The environment of the modules your config enables
+source "${HOME}/.config/maisys/shell/env.sh"
+
+# shell.bash.snippets
+source "${HOME}/.config/maisys/shell/bash/aliases.bash"
+source "${HOME}/.config/maisys/shell/bash/more aliases.bash"
+
+# ~/secrets.sh, if there is one
+if [ -f "${HOME}/secrets.sh" ]; then
+	source "${HOME}/secrets.sh"
+fi
