@@ -325,9 +325,9 @@ func newDistroHost(t *testing.T) *distroHost {
 		h.reg.register(c.Args[3])
 		return system.Result{}, nil
 	})
-	root := "wsl.exe -d fedora-dev -u root --cd ~ --exec "
+	root := "wsl.exe -d fedora-dev -u root --cd ~ --exec /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
 	h.runner.On(root+"sh -c", func(_ context.Context, c system.Cmd) (system.Result, error) {
-		switch c.Args[9] {
+		switch c.Args[slices.Index(c.Args, "-c")+1] {
 		case setupScript:
 			return system.Result{ExitCode: h.setupCode, Stderr: []byte("useradd: group 'wheel' does not exist\n")}, nil
 		case copyScript:
@@ -342,7 +342,7 @@ func newDistroHost(t *testing.T) *distroHost {
 	})
 	h.runner.On(root+"rm -f "+SetupRule, systemtest.Respond(0, ""))
 	h.runner.On("wsl.exe --terminate fedora-dev", systemtest.Respond(0, ""))
-	h.runner.On("wsl.exe -d fedora-dev -u phil --cd ~ --exec", func(_ context.Context, c system.Cmd) (system.Result, error) {
+	h.runner.On("wsl.exe -d fedora-dev -u phil --cd ~ --exec /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", func(_ context.Context, c system.Cmd) (system.Result, error) {
 		if c.Stream != nil {
 			_, _ = c.Stream.Write([]byte("Plan for workbox-camwin-fc44 (fedora 44, amd64)\n"))
 		}
@@ -429,8 +429,8 @@ func TestDistroApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := "wsl.exe -d fedora-dev -u root --cd '~' --exec "
-	wsl := "wsl.exe -d fedora-dev -u phil --cd '~' --exec "
+	root := "wsl.exe -d fedora-dev -u root --cd '~' --exec /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
+	wsl := "wsl.exe -d fedora-dev -u phil --cd '~' --exec /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
 	gitconfig := "[credential]\n\thelper = \"/mnt/c/Program\\\\ Files/Git/ucrt64/bin/git-credential-manager.exe\"\n"
 	want := []string{
 		"wsl.exe --install FedoraLinux-44 --name fedora-dev --no-launch",
@@ -503,10 +503,12 @@ func TestDistroUbuntu(t *testing.T) {
 		t.Fatal(err)
 	}
 	setup := h.runner.Calls()[1].Cmd
-	if got := setup.Args[11:14]; !slices.Equal(got, []string{"phil", "sudo", "ubuntu"}) {
+	// The script's arguments come after the script and its $0, "sh".
+	args := setup.Args[slices.Index(setup.Args, "-c")+3:]
+	if got := args[:3]; !slices.Equal(got, []string{"phil", "sudo", "ubuntu"}) {
 		t.Errorf("the setup script's user, group and os are %q", got)
 	}
-	if gitconfig := setup.Args[15]; gitconfig != "" {
+	if gitconfig := args[4]; gitconfig != "" {
 		t.Errorf("the setup script sets credential.helper without Git Credential Manager: %q", gitconfig)
 	}
 
@@ -522,7 +524,7 @@ func TestDistroUbuntu(t *testing.T) {
 }
 
 func TestDistroFailures(t *testing.T) {
-	root := "wsl.exe -d fedora-dev -u root --cd '~' --exec "
+	root := "wsl.exe -d fedora-dev -u root --cd '~' --exec /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
 	tests := []struct {
 		name     string
 		setup    func(h *distroHost)
@@ -606,7 +608,7 @@ func TestDistroAborted(t *testing.T) {
 		t.Fatal("Apply() worked")
 	}
 	cmds := h.runner.Commands()
-	if last := cmds[len(cmds)-1]; last != "wsl.exe -d fedora-dev -u root --cd '~' --exec rm -f "+SetupRule {
+	if last := cmds[len(cmds)-1]; last != "wsl.exe -d fedora-dev -u root --cd '~' --exec /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin rm -f "+SetupRule {
 		t.Errorf("the last command is %q, want the setup rule deleted", last)
 	}
 }

@@ -64,6 +64,8 @@ import (
 	"github.com/plombardi89/maisys2/internal/resource/terminal"
 	"github.com/plombardi89/maisys2/internal/resource/wsl"
 	"github.com/plombardi89/maisys2/test/fixture"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // The environment variables the test reads.
@@ -536,7 +538,11 @@ func (h *host) checkDistro(t *testing.T, distro, password string) {
 		machine = brokenMachine
 	}
 	out, _ = h.wsl(t, minute, distro, user, "", "cat", "/home/"+user+"/.config/maisys/maisys.toml")
-	expect("maisys isn't set up inside for "+machine, strings.Contains(out, fmt.Sprintf("%q", machine)), out)
+	var saved struct {
+		Machine string `toml:"machine"`
+	}
+	_ = toml.Unmarshal([]byte(out), &saved)
+	expect("maisys isn't set up inside for "+machine, saved.Machine == machine, out)
 }
 
 // checkFirstRun runs the image's own first-run command, which WSL runs the

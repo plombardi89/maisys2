@@ -31,10 +31,15 @@ func command(label string, args ...string) system.Cmd {
 	return system.Cmd{Name: Exe, Args: args, Env: []string{utf8Env}, Label: label}
 }
 
+// linuxPath is the PATH commands run with inside a distro. wsl --exec
+// doesn't give them a login shell's PATH, and on some images (Ubuntu's)
+// what it gives leaves out /usr/sbin, where chpasswd and useradd are.
+const linuxPath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 // inDistro returns a command that runs argv in distro as user, in the
-// user's home folder, without a shell.
+// user's home folder, without a shell, with linuxPath.
 func inDistro(distro, user, label string, argv ...string) system.Cmd {
-	return command(label, append([]string{"-d", distro, "-u", user, "--cd", "~", "--exec"}, argv...)...)
+	return command(label, append([]string{"-d", distro, "-u", user, "--cd", "~", "--exec", "/usr/bin/env", linuxPath}, argv...)...)
 }
 
 // Registry reads what WSL and Windows record in the registry.
