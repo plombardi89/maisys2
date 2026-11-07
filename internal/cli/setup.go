@@ -26,11 +26,7 @@ var errNotSetUp = errors.New("this machine isn't set up for maisys yet: run `mai
 // one in the local settings, unless CONFIG-URL or --dir names another one
 // to switch to.
 func (s *syncRun) findRepo() error {
-	paths, err := settings.DefaultPaths(s.g.goos, s.g.getenv)
-	if err != nil {
-		return err
-	}
-	s.paths = paths
+	paths := s.paths
 	dir, err := s.g.absPath(s.opts.dir, paths.Home)
 	if err != nil {
 		return err
@@ -84,7 +80,7 @@ func (s *syncRun) findRepo() error {
 		}
 		return fmt.Errorf("%s: run `maisys sync --dir PATH` to use another clone", msg)
 	}
-	s.repo = &configRepo{Repo: newRepo(saved.RepoDir, saved.RepoURL), dir: saved.RepoDir, settings: saved}
+	s.repo = &configRepo{Repo: s.g.newRepo(saved.RepoDir, saved.RepoURL), dir: saved.RepoDir, settings: saved}
 	return nil
 }
 
@@ -132,7 +128,7 @@ func (s *syncRun) useClone(rawURL, dir string) error {
 		}
 	}
 
-	s.repo = &configRepo{Repo: newRepo(s.clone.Dir, repoURL), dir: s.clone.Dir}
+	s.repo = &configRepo{Repo: s.g.newRepo(s.clone.Dir, repoURL), dir: s.clone.Dir}
 	err = s.repo.checkMarker(errOut, s.warned)
 	if !errors.Is(err, config.ErrNotConfigRepo) {
 		return err
@@ -186,7 +182,8 @@ func existingClone(ctx context.Context, rawURL, dir string, opts gitrepo.Options
 }
 
 // chooseMachine selects the machine, and saves the local settings if this
-// is the first run, the config repo has changed, or the machine has.
+// is the first run, the config repo has changed, or the machine has. A
+// change of config repo or machine goes into the plan's header.
 func (s *syncRun) chooseMachine() error {
 	out, errOut := s.cmd.OutOrStdout(), s.cmd.ErrOrStderr()
 	var old string
@@ -227,19 +224,16 @@ func (s *syncRun) chooseMachine() error {
 		if from == to {
 			from, to = s.saved.RepoDir, s.repo.dir
 		}
-		if _, err := fmt.Fprintf(out, "maisys: config repo: %s → %s\n", from, to); err != nil {
-			return err
-		}
+		s.header = append(s.header, fmt.Sprintf("config repo: %s → %s", from, to))
 	}
 	switch {
 	case name == old:
-		return nil
 	case old == "":
-		_, err = fmt.Fprintf(out, "maisys: machine: %s (from %s)\n", name, source)
+		s.header = append(s.header, fmt.Sprintf("machine: %s (from %s)", name, source))
 	default:
-		_, err = fmt.Fprintf(out, "maisys: machine: %s (was %s)\n", name, old)
+		s.header = append(s.header, fmt.Sprintf("machine: %s (was %s)", name, old))
 	}
-	return err
+	return nil
 }
 
 // describeSetup describes the config repo the first run set up.

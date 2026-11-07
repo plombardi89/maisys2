@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plombardi89/maisys2/internal/config"
-	"github.com/plombardi89/maisys2/internal/modules"
 	"github.com/plombardi89/maisys2/internal/settings"
 )
 
@@ -81,7 +80,7 @@ func (g *globalOptions) openRepo(cmd *cobra.Command, strict bool) (*configRepo, 
 	g.debugf(errOut, "config repo %s (from %s)", dir, source)
 
 	r.dir = dir
-	r.Repo = newRepo(dir, url)
+	r.Repo = g.newRepo(dir, url)
 	r.Strict = strict
 	if err := r.checkMarker(errOut, nil); err != nil {
 		return nil, notConfigRepo(err, dir)
@@ -91,8 +90,8 @@ func (g *globalOptions) openRepo(cmd *cobra.Command, strict bool) (*configRepo, 
 
 // newRepo returns the config repo in dir, whose URL is url. Unknown keys
 // in it are ignored.
-func newRepo(dir, url string) *config.Repo {
-	return &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: url}
+func (g *globalOptions) newRepo(dir, url string) *config.Repo {
+	return &config.Repo{FS: os.DirFS(dir), Modules: g.modules, URL: url}
 }
 
 // checkMarker reads the repo's maisys.toml, prints its warnings, and fails

@@ -127,8 +127,8 @@ jobs:
       # snapshot and restart. Snapshot versions are <last tag>-SNAPSHOT-<commit>
       # (0.0.0-SNAPSHOT-<commit> before the first tag), so the older build is
       # 0.0.0-0, which sorts before any of them, and the expected version comes
-      # from GoReleaser's metadata. sync is still a placeholder, so it then
-      # fails; that's fine.
+      # from GoReleaser's metadata. maisys isn't set up there, so the sync
+      # then fails; that's fine.
       - name: Self-update to the snapshot
         run: |
           version=$(jq -r .version dist/metadata.json)
