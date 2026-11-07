@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/plombardi89/maisys2/internal/facts"
 )
 
 // actAsRelease makes updateSelf behave as if this binary were release v. The
@@ -23,9 +25,11 @@ func actAsRelease(t *testing.T, v string) {
 	t.Cleanup(func() { buildVersion = old })
 }
 
-// runWithContext runs maisys through Execute, with environment variables
-// env and a home folder of its own. maisys isn't set up there, so a sync
-// that gets past updating maisys stops at the first-run setup.
+// runWithContext runs maisys in the process's own environment, as Execute
+// does, but with environment variables env, a home folder of its own, and a
+// fake system that isn't root, since tests may run as root. maisys isn't
+// set up there, so a sync that gets past updating maisys stops at the
+// first-run setup.
 func runWithContext(ctx context.Context, t *testing.T, env map[string]string, args ...string) (code int, stderr string) {
 	t.Helper()
 	home := t.TempDir()
@@ -37,7 +41,10 @@ func runWithContext(ctx context.Context, t *testing.T, env map[string]string, ar
 	}
 	maps.Copy(vars, env)
 	var out, errOut bytes.Buffer
-	code = Execute(ctx, args, &out, &errOut, func(key string) string { return vars[key] })
+	e := processEnvironment(nil, &out, &errOut, func(key string) string { return vars[key] })
+	system := newTestEnv(t).system
+	e.detect = func() (*facts.System, error) { return &system, nil }
+	code = execute(ctx, args, e)
 	return code, errOut.String()
 }
 

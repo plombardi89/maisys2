@@ -233,6 +233,21 @@ func (r *Repo) Dirty(ctx context.Context) (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
+// Head returns the abbreviated hash of the commit the clone has checked
+// out, or "" if it has no commits yet.
+func (r *Repo) Head(ctx context.Context) (string, error) {
+	out, err := r.run(ctx, call{dir: r.Dir, args: []string{"rev-parse", "--short", "--verify", "--quiet", "HEAD"}})
+	if err != nil {
+		// With --quiet, a HEAD that doesn't point at a commit yet only
+		// exits with code 1.
+		if ge, ok := errors.AsType[*gitError](err); ok && ge.code == 1 && strings.TrimSpace(ge.stderr) == "" {
+			return "", nil
+		}
+		return "", fmt.Errorf("couldn't read the commit of %s: %w", r.Dir, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // Pull fast-forwards the clone to its upstream branch. It fails with
 // ErrNoFastForward if that would need a merge, and with ErrAuth if git can't
 // sign in, for example because the saved token has expired.
