@@ -169,6 +169,20 @@ func TestUnpack(t *testing.T) {
 			want:    []string{"LICENSE: license", "golangci-lint: program"},
 		},
 		{
+			name: "tar.gz with a top-level folder entry stripped",
+			file: "uv-x86_64-unknown-linux-gnu.tar.gz",
+			data: func(t *testing.T) []byte {
+				t.Helper()
+				return tarGz(t, []entry{
+					{name: "uv-x86_64-unknown-linux-gnu/", mode: fs.ModeDir | 0o755},
+					{name: "uv-x86_64-unknown-linux-gnu/uv", body: "uv", mode: 0o755},
+					{name: "uv-x86_64-unknown-linux-gnu/uvx", body: "uvx", mode: 0o755},
+				})
+			},
+			archive: Archive{Format: TarGz, Strip: 1},
+			want:    []string{"uv: uv", "uvx: uvx"},
+		},
+		{
 			name: "tar.gz with ./",
 			file: "yq_linux_amd64.tar.gz",
 			data: func(t *testing.T) []byte {
