@@ -6,6 +6,7 @@ package removers
 import (
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/resource/checkout"
+	"github.com/plombardi89/maisys2/internal/resource/cleanup"
 	"github.com/plombardi89/maisys2/internal/resource/file"
 	"github.com/plombardi89/maisys2/internal/resource/gitconfig"
 	"github.com/plombardi89/maisys2/internal/resource/goinstall"
@@ -14,6 +15,7 @@ import (
 	"github.com/plombardi89/maisys2/internal/resource/loginshell"
 	"github.com/plombardi89/maisys2/internal/resource/pkg"
 	"github.com/plombardi89/maisys2/internal/resource/repo"
+	"github.com/plombardi89/maisys2/internal/resource/sudoers"
 	"github.com/plombardi89/maisys2/internal/resource/tool"
 	"github.com/plombardi89/maisys2/internal/resource/unit"
 	"github.com/plombardi89/maisys2/internal/resource/uvtool"
@@ -35,5 +37,7 @@ func All() resource.Removers {
 		installer.Remover{},
 		goinstall.Remover{},
 		uvtool.Remover{},
+		sudoers.Remover{},
+		cleanup.Remover{},
 	)
 }
