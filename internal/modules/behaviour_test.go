@@ -1,6 +1,7 @@
 package modules_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/plombardi89/maisys2/internal/engine"
@@ -8,31 +9,51 @@ import (
 	"github.com/plombardi89/maisys2/internal/shells"
 )
 
-// TestBehaviour checks which modules have resources (engine.Module) and
-// which add to the shell environment (shells.Contributor). A module that
-// gains either is added here, one line each, in alphabetical order.
-func TestBehaviour(t *testing.T) {
-	want := map[string]struct{ resources, shellEnv bool }{
-		"shell": {resources: true},
+// What each module does beyond its config. A module that gains resources
+// or a shell environment is added here, in alphabetical order.
+var (
+	// engineModules have resources (engine.Module). The Windows modules
+	// gain theirs in M9.
+	engineModules = []string{
+		"files", "golang", "golangci_lint", "hashicorp", "intellij", "kubectl", "legacy", "lnav", "mage",
+		"mutagen", "opencode", "packages", "podman", "protoc", "python_tools", "sdkman", "shell", "steam",
+		"stern", "sudo", "wsl", "yq",
 	}
+	// shellContributors add to the shell environment (shells.Contributor).
+	shellContributors = []string{
+		"golang", "golangci_lint", "intellij", "kubectl", "lnav", "mage", "mutagen", "opencode", "protoc",
+		"python_tools", "sdkman", "stern", "wsl", "yq",
+	}
+)
 
+// TestBehaviour checks which modules have resources and which add to the
+// shell environment, and that modules only depend on other modules.
+func TestBehaviour(t *testing.T) {
 	names := map[string]bool{}
 	for _, mod := range modules.All() {
-		name := mod.Info().Name
-		names[name] = true
-		_, resources := mod.(engine.Module)
-		_, shellEnv := mod.(shells.Contributor)
-		w := want[name]
-		if resources != w.resources {
-			t.Errorf("%s implements engine.Module: %t, want %t", name, resources, w.resources)
-		}
-		if shellEnv != w.shellEnv {
-			t.Errorf("%s implements shells.Contributor: %t, want %t", name, shellEnv, w.shellEnv)
+		names[mod.Info().Name] = true
+	}
+	for _, name := range slices.Concat(engineModules, shellContributors) {
+		if !names[name] {
+			t.Errorf("there's no module %s", name)
 		}
 	}
-	for name := range want {
-		if !names[name] {
-			t.Errorf("there's no module called %s", name)
+	for _, mod := range modules.All() {
+		name := mod.Info().Name
+		em, isEngine := mod.(engine.Module)
+		if want := slices.Contains(engineModules, name); isEngine != want {
+			t.Errorf("%s implements engine.Module: %t, want %t", name, isEngine, want)
+		}
+		if _, ok := mod.(shells.Contributor); ok != slices.Contains(shellContributors, name) {
+			t.Errorf("%s implements shells.Contributor: %t, want %t", name, ok, !ok)
+		}
+		if !isEngine {
+			continue
+		}
+		for _, dep := range em.DependsOn() {
+			if !names[dep] || dep == name {
+				t.Errorf("%s depends on %q, which isn't another module", name, dep)
+			}
 		}
 	}
 }

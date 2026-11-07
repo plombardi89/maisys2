@@ -143,7 +143,7 @@ Works on Fedora and Ubuntu.
 |---|---|---|---|
 | `golang.enabled` | boolean | `false` | `enabled` turns the module on. |
 | `golang.version` | string | `"latest"` | `version` to install: "latest" (the default) for the newest stable release, or an exact version such as "1.2.3" to pin it. |
-| `golang.tools` | list of strings | `[]` | `tools` lists Go programs to install with go install, as a package path and a version, such as "mvdan.cc/gofumpt@latest". A program is only reinstalled when a newer version exists. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `golang.tools` | list of strings | `[]` | `tools` lists Go programs to install with go install, as a package path followed by @ and a version: "latest", or an exact version such as "v0.8.0". For example "mvdan.cc/gofumpt@latest". Without a version, the latest is installed. A program is only reinstalled when the version wanted changes, such as when a newer one is released. If a program is listed more than once, as when a machine file pins one that a profile lists, the last entry wins. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
 
 ## mage
 
@@ -283,7 +283,7 @@ Works on Fedora and Ubuntu.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `python_tools.enabled` | boolean | `false` | `enabled` turns the module on. |
-| `python_tools.tools` | list of strings | `[]` | `tools` lists the Python packages to install with uv tool install, such as "codespell". Each one gets an environment of its own. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `python_tools.tools` | list of strings | `[]` | `tools` lists the Python packages to install with uv tool install, such as "codespell". Each one gets an environment of its own, and is kept at its latest version. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
 
 ## steam
 
@@ -305,7 +305,7 @@ Works on Fedora and Ubuntu.
 |---|---|---|---|
 | `intellij.enabled` | boolean | `false` | `enabled` turns the module on. |
 | `intellij.version` | string | `"latest"` | `version` to install: "latest" (the default) for the newest stable release, or an exact version such as "1.2.3" to pin it. |
-| `intellij.install_deps` | boolean | `false` | `install_deps` also installs the system packages IntelliJ needs to run, which minimal installs and WSL distros may not have. |
+| `intellij.install_deps` | boolean | `false` | `install_deps` also installs the system packages IntelliJ needs to run, which minimal installs and WSL distros may not have: the X11, font and sound libraries its Java runtime uses, and those of its embedded browser, which shows the Markdown preview. |
 
 ## wsl
 
