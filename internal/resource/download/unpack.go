@@ -142,8 +142,11 @@ func (x *extractor) tarGz(src string) error {
 			return err
 		}
 		rel, err := x.path(hdr.Name)
-		if err != nil || rel == "" {
+		if err != nil {
 			return err
+		}
+		if rel == "" {
+			continue
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
