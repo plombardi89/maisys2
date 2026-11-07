@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path"
 	"reflect"
 	"regexp"
 
@@ -24,13 +23,30 @@ var ErrUnknownKey = errors.New("unknown key")
 // .toml) must match.
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
+// NameRule describes the names machines and profiles can have.
+const NameRule = "use lower-case letters, digits, '.', '-' and '_'"
+
+// ValidName reports whether name can name a machine or a profile: it's
+// made of lower-case letters, digits, '.', '-' and '_', and starts with a
+// letter or a digit.
+func ValidName(name string) bool {
+	return namePattern.MatchString(name)
+}
+
 // Repo is a config repo.
 type Repo struct {
 	// FS is the repo's files, rooted at the top of the repo.
 	FS fs.FS
 	// Modules are the modules whose tables config files may contain.
 	Modules []Module
+	// URL is the repo's own URL, the one this machine clones it from, if
+	// known. Validation uses it to check that new WSL distros can clone
+	// the repo.
+	URL string
 }
+
+// machineKeys are the keys a machine file has besides module tables.
+var machineKeys = []string{"os", "os_version", "arch", "profiles"}
 
 // LoadMachine loads machines/<name>.toml and the profiles it lists, and
 // merges them on top of each module's defaults: the profiles in the order
@@ -38,14 +54,14 @@ type Repo struct {
 // file, not just the first.
 func (r *Repo) LoadMachine(name string) (*Machine, error) {
 	if !namePattern.MatchString(name) {
-		return nil, fmt.Errorf("invalid machine name %q: use lower-case letters, digits, '.', '-' and '_'", name)
+		return nil, fmt.Errorf("invalid machine name %q: %s", name, NameRule)
 	}
 	schema, err := newSchema(r.Modules)
 	if err != nil {
 		return nil, err
 	}
 
-	machineFile, err := r.readLayer(path.Join(machinesDir, name+".toml"), schema.machine)
+	machineFile, err := r.readLayer(MachineFile(name), schema.machine)
 	if err != nil {
 		return nil, err
 	}
@@ -59,22 +75,29 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 		ProfileOS: map[string]OS{},
 		Modules:   map[string]ModuleConfig{},
 		Origins:   map[string][]string{},
+		locs:      map[string]*locations{},
+	}
+	for _, key := range machineKeys {
+		if _, ok := machineFile.present[key]; ok {
+			m.Origins[key] = []string{machineFile.path}
+		}
 	}
 
 	var layers []*layer
 	var errs []error
 	seen := map[string]bool{}
 	for _, p := range m.Profiles {
+		at := machineFile.locs.whereItem(machineFile.path, "profiles", p)
 		switch {
 		case !namePattern.MatchString(p):
-			errs = append(errs, fmt.Errorf("%s: invalid profile name %q", machineFile.path, p))
+			errs = append(errs, fmt.Errorf("%s: invalid profile name %q: %s", at, p, NameRule))
 			continue
 		case seen[p]:
-			errs = append(errs, fmt.Errorf("%s: profile %q is listed more than once", machineFile.path, p))
+			errs = append(errs, fmt.Errorf("%s: profile %q is listed more than once", at, p))
 			continue
 		}
 		seen[p] = true
-		l, err := r.readLayer(path.Join(profilesDir, p+".toml"), schema.profile)
+		l, err := r.readLayer(profileFile(p), schema.profile)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -93,7 +116,9 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 		m.Modules[schema.names[i]] = freshDefaults(mod)
 	}
 	for _, l := range layers {
-		mg := &merger{file: l.path, origins: m.Origins}
+		m.layers = append(m.layers, l.path)
+		m.locs[l.path] = l.locs
+		mg := &merger{file: l.path, origins: m.Origins, locs: l.locs, warnings: &m.Warnings}
 		for i, name := range schema.names {
 			present, ok := l.present[name].(map[string]any)
 			if !ok {
@@ -122,6 +147,7 @@ type layer struct {
 	path    string
 	value   reflect.Value  // the decoded struct
 	present map[string]any // the keys the file sets
+	locs    *locations     // where it sets them
 }
 
 func stringSlice(v reflect.Value) []string {
@@ -137,9 +163,20 @@ func (r *Repo) readLayer(file string, typ reflect.Type) (*layer, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	v := reflect.New(typ)
-	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(v.Interface()); err != nil {
+	present, err := decodeStrict(file, data, v)
+	if err != nil {
+		return nil, err
+	}
+	return &layer{path: file, value: v.Elem(), present: present, locs: locate(data)}, nil
+}
+
+// decodeStrict decodes data, read from file, into ptr, a pointer to a
+// struct. Keys the struct has no field for are errors, including keys that
+// only differ from a field's in case. It returns the keys data sets.
+func decodeStrict(file string, data []byte, ptr reflect.Value) (map[string]any, error) {
+	typ := ptr.Type().Elem()
+	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(ptr.Interface()); err != nil {
 		return nil, decodeError(file, typ, err)
 	}
 	var present map[string]any
@@ -149,5 +186,5 @@ func (r *Repo) readLayer(file string, typ reflect.Type) (*layer, error) {
 	if unknown := unknownKeys(typ, present, nil); len(unknown) > 0 {
 		return nil, unknownKeyErrors(file, data, unknown)
 	}
-	return &layer{path: file, value: v.Elem(), present: present}, nil
+	return present, nil
 }

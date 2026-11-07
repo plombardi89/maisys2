@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -10,6 +11,10 @@ import (
 type merger struct {
 	file    string
 	origins map[string][]string
+	// locs is where the layer sets each value.
+	locs *locations
+	// warnings collects a warning for each deprecated key the layer sets.
+	warnings *[]string
 }
 
 // mergeStruct merges the fields of src that the layer sets (the keys in
@@ -35,8 +40,27 @@ func (m *merger) mergeStruct(dst, src reflect.Value, present map[string]any, pre
 		if !ok {
 			continue
 		}
-		m.mergeField(dst.Field(i), src.Field(i), f, value, joinPath(prefix, name))
+		path := joinPath(prefix, name)
+		if note := f.Tag.Get("deprecated"); note != "" {
+			m.deprecated(path, note)
+		}
+		m.mergeField(dst.Field(i), src.Field(i), f, value, path)
 	}
+}
+
+// deprecated warns that the layer sets path, a deprecated key. note says
+// what to use instead.
+func (m *merger) deprecated(path, note string) {
+	if m.warnings == nil {
+		return
+	}
+	at := m.file
+	if m.locs != nil {
+		if pos, ok := m.locs.values[path]; ok {
+			at = fmt.Sprintf("%s:%d:%d", m.file, pos.Line, pos.Column)
+		}
+	}
+	*m.warnings = append(*m.warnings, fmt.Sprintf("%s: %s is deprecated and will be removed in a later config_version: %s", at, path, note))
 }
 
 func (m *merger) mergeField(dst, src reflect.Value, f reflect.StructField, present any, path string) {

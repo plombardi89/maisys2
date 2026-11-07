@@ -114,6 +114,9 @@ profiles = ["base"]
 	if m.ProfileOS["base"] != config.Ubuntu {
 		t.Errorf("ProfileOS = %v", m.ProfileOS)
 	}
+	for _, key := range []string{"os", "os_version", "arch", "profiles"} {
+		assertOrigins(t, m, key, "machines/box.toml")
+	}
 }
 
 func TestModulesNoFileMentionsKeepTheirDefaults(t *testing.T) {
@@ -126,8 +129,9 @@ func TestModulesNoFileMentionsKeepTheirDefaults(t *testing.T) {
 	if files(m) == nil {
 		t.Error("files has no config")
 	}
-	if len(m.Origins) != 0 {
-		t.Errorf("Origins = %v, want none", m.Origins)
+	want := map[string][]string{"os": {"machines/box.toml"}}
+	if !reflect.DeepEqual(m.Origins, want) {
+		t.Errorf("Origins = %v, want only the machine's os, %v", m.Origins, want)
 	}
 }
 
@@ -247,6 +251,94 @@ target = "~/.config/nvim/"
 	assertOrigins(t, m, "files.items.nvim.source", "profiles/base.toml")
 }
 
+func TestWhere(t *testing.T) {
+	m := mustLoad(t, fstest.MapFS{
+		"machines/box.toml": file(`
+os = "fedora"
+profiles = ["base"]
+
+[golang]
+tools = ["task"]
+flags = [
+  "-x",
+]
+
+[files.items."a.b"]
+target = "~/a.b"
+
+[files.vars]
+"my.var" = "x"
+'quoted' = 'y'
+`),
+		"profiles/base.toml": file(`
+golang.enabled = true
+golang.version = "1.27.3"
+golang.tools = ["goimports", "task"]
+
+[files]
+nested = { a = "base" }
+
+[files.items.nvim]
+source = "files/nvim/"
+`),
+	})
+
+	tests := []struct {
+		path, item, want string
+	}{
+		{path: "os", want: "machines/box.toml:1:6"},
+		{path: "profiles", want: "machines/box.toml:2:12"},
+		{path: "os_version", want: ""},
+		{path: "golang.enabled", want: "profiles/base.toml:1:18"},
+		{path: "golang.version", want: "profiles/base.toml:2:18"},
+		// A list that combines across layers: the last file that added to it.
+		{path: "golang.tools", want: "machines/box.toml:5:9"},
+		{path: "golang.flags", want: "machines/box.toml:6:9"},
+		{path: "files.nested.a", want: "profiles/base.toml:6:16"},
+		{path: `files.items."a.b".target`, want: "machines/box.toml:11:10"},
+		{path: `files.vars."my.var"`, want: "machines/box.toml:14:12"},
+		{path: "files.vars.quoted", want: "machines/box.toml:15:12"},
+		// Tables: where the last file that names them does.
+		{path: "golang", want: "machines/box.toml:4:2"},
+		{path: "files.nested", want: "profiles/base.toml:6:10"},
+		{path: `files.items."a.b"`, want: "machines/box.toml:10:14"},
+		{path: "files.items.nvim", want: "profiles/base.toml:8:14"},
+		// Values no file sets keep their defaults.
+		{path: "files.nested.b", want: ""},
+		{path: "files.items.nvim.target", want: ""},
+		// Items: the first file that added them.
+		{path: "golang.tools", item: "goimports", want: "profiles/base.toml:3:17"},
+		{path: "golang.tools", item: "task", want: "profiles/base.toml:3:30"},
+		{path: "golang.tools", item: "unknown", want: "machines/box.toml:5:9"},
+		{path: "profiles", item: "base", want: "machines/box.toml:2:13"},
+	}
+	for _, tt := range tests {
+		got := m.Where(tt.path)
+		if tt.item != "" {
+			got = m.WhereItem(tt.path, tt.item)
+		}
+		if got != tt.want {
+			t.Errorf("Where(%q) (item %q) = %q, want %q", tt.path, tt.item, got, tt.want)
+		}
+	}
+}
+
+func TestWhereIgnoresAProfilesOS(t *testing.T) {
+	m := mustLoad(t, fstest.MapFS{
+		"machines/box.toml":  file(`profiles = ["base"]`),
+		"profiles/base.toml": file(`os = "fedora"`),
+	})
+	if got := m.Where("os"); got != "" {
+		t.Errorf(`Where("os") = %q, want "": the machine file doesn't set os`, got)
+	}
+}
+
+func TestJoinKey(t *testing.T) {
+	if got, want := config.JoinKey("files", "items", "a.b", "my item", "target"), `files.items."a.b"."my item".target`; got != want {
+		t.Errorf("JoinKey = %s, want %s", got, want)
+	}
+}
+
 func TestLoadMachineErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -279,7 +371,13 @@ func TestLoadMachineErrors(t *testing.T) {
 				"machines/box.toml":  file(`profiles = ["base", "base"]`),
 				"profiles/base.toml": file(``),
 			},
-			want: []string{`machines/box.toml: profile "base" is listed more than once`},
+			want: []string{`machines/box.toml:1:13: profile "base" is listed more than once`},
+		},
+		{
+			name:    "invalid profile name",
+			machine: "box",
+			files:   fstest.MapFS{"machines/box.toml": file(`profiles = ["Base"]`)},
+			want:    []string{`machines/box.toml:1:13: invalid profile name "Base"`},
 		},
 		{
 			name:    "unknown keys, reported with their positions",

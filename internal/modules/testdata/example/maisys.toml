@@ -1,0 +1,2 @@
+config_version = 1
+requires = ">= 0.6"        # optional minimum maisys version

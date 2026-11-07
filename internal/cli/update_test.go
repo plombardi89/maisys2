@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,9 +23,21 @@ func actAsRelease(t *testing.T, v string) {
 	t.Cleanup(func() { buildVersion = old })
 }
 
-func runWithContext(ctx context.Context, env map[string]string, args ...string) (code int, stderr string) {
+// runWithContext runs maisys through Execute, with environment variables
+// env and a home folder of its own. maisys isn't set up there, so a sync
+// that gets past updating maisys stops at the first-run setup.
+func runWithContext(ctx context.Context, t *testing.T, env map[string]string, args ...string) (code int, stderr string) {
+	t.Helper()
+	home := t.TempDir()
+	vars := map[string]string{
+		"HOME":         home,
+		"USERPROFILE":  home,
+		"APPDATA":      filepath.Join(home, "AppData", "Roaming"),
+		"LOCALAPPDATA": filepath.Join(home, "AppData", "Local"),
+	}
+	maps.Copy(vars, env)
 	var out, errOut bytes.Buffer
-	code = Execute(ctx, args, &out, &errOut, func(key string) string { return env[key] })
+	code = Execute(ctx, args, &out, &errOut, func(key string) string { return vars[key] })
 	return code, errOut.String()
 }
 
@@ -33,14 +46,14 @@ func TestSelfUpdateFailureIsAWarning(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(srv.Close)
 
-	code, stderr := runWithContext(t.Context(), map[string]string{"MAISYS_RELEASE_URL": srv.URL}, "sync")
+	code, stderr := runWithContext(t.Context(), t, map[string]string{"MAISYS_RELEASE_URL": srv.URL}, "sync")
 	if code != exitError {
 		t.Errorf("exit code = %d, want %d", code, exitError)
 	}
 	for _, want := range []string{
 		"maisys: warning: couldn't update maisys: ",
 		"(carrying on with 0.1.0)",
-		`maisys: "sync" is not implemented yet`, // the sync carried on
+		"maisys: " + notSetUp, // the sync carried on
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr doesn't contain %q:\n%s", want, stderr)
@@ -69,7 +82,7 @@ func TestSelfUpdateInterrupted(t *testing.T) {
 		}
 	}()
 
-	code, stderr := runWithContext(ctx, map[string]string{"MAISYS_RELEASE_URL": srv.URL}, "sync")
+	code, stderr := runWithContext(ctx, t, map[string]string{"MAISYS_RELEASE_URL": srv.URL}, "sync")
 	if code != exitError {
 		t.Errorf("exit code = %d, want %d", code, exitError)
 	}
@@ -77,7 +90,7 @@ func TestSelfUpdateInterrupted(t *testing.T) {
 	if !strings.Contains(stderr, want) {
 		t.Errorf("stderr doesn't contain %q:\n%s", want, stderr)
 	}
-	for _, unwanted := range []string{"warning", "not implemented"} {
+	for _, unwanted := range []string{"warning", notSetUp} {
 		if strings.Contains(stderr, unwanted) {
 			t.Errorf("stderr contains %q, want the sync to stop:\n%s", unwanted, stderr)
 		}
@@ -105,11 +118,11 @@ func TestSelfUpdateSkipped(t *testing.T) {
 
 			env := map[string]string{"MAISYS_RELEASE_URL": srv.URL}
 			maps.Copy(env, tt.env)
-			_, stderr := runWithContext(t.Context(), env, tt.args...)
+			_, stderr := runWithContext(t.Context(), t, env, tt.args...)
 			if n := requests.Load(); n != 0 {
 				t.Errorf("made %d requests to the release server, want none", n)
 			}
-			if !strings.Contains(stderr, `"sync" is not implemented yet`) {
+			if !strings.Contains(stderr, notSetUp) {
 				t.Errorf("stderr = %q, want the sync to carry on", stderr)
 			}
 		})
