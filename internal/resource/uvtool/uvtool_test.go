@@ -192,7 +192,7 @@ func TestCheckNothingInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertChange(t, got, resource.Change{Action: resource.Create, Summary: "install ftfy"})
-	if want := []string{f.uv.Path + " tool list --color never"}; !slices.Equal(f.runner.Commands(), want) {
+	if want := []string{system.Cmd{Name: f.uv.Path}.String() + " tool list --color never"}; !slices.Equal(f.runner.Commands(), want) {
 		t.Errorf("commands = %q, want %q", f.runner.Commands(), want)
 	}
 }
@@ -293,7 +293,7 @@ func TestApply(t *testing.T) {
 				t.Errorf("Apply() = %+v, want %+v", rec, tt.want)
 			}
 			cmds := f.runner.Commands()
-			if !slices.Contains(cmds, f.uv.Path+" "+tt.command) {
+			if !slices.Contains(cmds, system.Cmd{Name: f.uv.Path}.String()+" "+tt.command) {
 				t.Errorf("commands = %q, want %q", cmds, tt.command)
 			}
 			for _, c := range f.runner.Calls() {

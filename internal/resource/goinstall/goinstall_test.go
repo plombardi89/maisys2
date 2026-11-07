@@ -319,7 +319,9 @@ func TestApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{f.goBin + " install " + taskPkg + "@v3.41.0", f.goBin + " env GOBIN GOPATH GOEXE"}
+	// The runner quotes paths with backslashes, as on Windows.
+	goCmd := system.Cmd{Name: f.goBin}.String()
+	want := []string{goCmd + " install " + taskPkg + "@v3.41.0", goCmd + " env GOBIN GOPATH GOEXE"}
 	if got := f.runner.Commands(); !slices.Equal(got, want) {
 		t.Errorf("commands = %q, want %q", got, want)
 	}
