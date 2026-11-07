@@ -346,7 +346,7 @@
           "default": "latest"
         },
         "tools": {
-          "description": "`tools` lists Go programs to install with go install, as a package path and a version, such as \"mvdan.cc/gofumpt@latest\". A program is only reinstalled when a newer version exists. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "description": "`tools` lists Go programs to install with go install, as a package path followed by @ and a version: \"latest\", or an exact version such as \"v0.8.0\". For example \"mvdan.cc/gofumpt@latest\". Without a version, the latest is installed. A program is only reinstalled when the version wanted changes, such as when a newer one is released. If a program is listed more than once, as when a machine file pins one that a profile lists, the last entry wins. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
           "type": "array",
           "items": {
             "type": "string"
@@ -558,7 +558,7 @@
           "default": false
         },
         "tools": {
-          "description": "`tools` lists the Python packages to install with uv tool install, such as \"codespell\". Each one gets an environment of its own. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "description": "`tools` lists the Python packages to install with uv tool install, such as \"codespell\". Each one gets an environment of its own, and is kept at its latest version. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
           "type": "array",
           "items": {
             "type": "string"
@@ -595,7 +595,7 @@
           "default": "latest"
         },
         "install_deps": {
-          "description": "`install_deps` also installs the system packages IntelliJ needs to run, which minimal installs and WSL distros may not have.",
+          "description": "`install_deps` also installs the system packages IntelliJ needs to run, which minimal installs and WSL distros may not have: the X11, font and sound libraries its Java runtime uses, and those of its embedded browser, which shows the Markdown preview.",
           "type": "boolean",
           "default": false
         }

@@ -131,6 +131,30 @@ tools = ["mvdan.cc/gofumpt@latest", ""]
 `,
 			want: []string{"machines/box.toml:5:37: golang.tools has an empty entry"},
 		},
+		{
+			name: "golang: tools with and without versions",
+			machine: `
+os = "fedora"
+
+[golang]
+enabled = true
+tools = ["mvdan.cc/gofumpt@latest", "golang.org/x/tools/cmd/goimports", "github.com/go-task/task/v3/cmd/task@v3.41.0"]
+`,
+		},
+		{
+			name: "golang: invalid tools",
+			machine: `
+os = "fedora"
+
+[golang]
+enabled = true
+tools = ["mvdan.cc/gofumpt@master", "mvdan.cc/gofumpt latest"]
+`,
+			want: []string{
+				`machines/box.toml:5:10: golang.tools has an invalid entry, "mvdan.cc/gofumpt@master": the version must be "latest" or an exact version such as "v1.2.3", not "master"`,
+				`machines/box.toml:5:37: golang.tools has an invalid entry, "mvdan.cc/gofumpt latest": "mvdan.cc/gofumpt latest" isn't a Go package path, such as "mvdan.cc/gofumpt"`,
+			},
+		},
 
 		// Lists of names
 		{
