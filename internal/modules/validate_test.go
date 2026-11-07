@@ -606,6 +606,30 @@ items.fish = { source = "files/fish-env/", target = "~/.config/fish/" }
 			},
 		},
 
+		// wsl
+		{
+			name: "wsl: X410 with systemd",
+			machine: `
+os = "fedora"
+
+[wsl]
+enabled = true
+wslg = false
+`,
+		},
+		{
+			name: "wsl: X410 without systemd",
+			machine: `
+os = "ubuntu"
+
+[wsl]
+enabled = true
+wslg = false
+systemd = false
+`,
+			want: []string{"machines/box.toml:5:8: wsl.wslg is false, which sets up the X410 bridge as a systemd service, but wsl.systemd is false: turn systemd on, or wslg back on"},
+		},
+
 		// wsl_host
 		{
 			name: "wsl_host: a valid config",

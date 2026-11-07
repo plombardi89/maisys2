@@ -27,13 +27,16 @@ type Config struct {
 	// Systemd runs systemd in the distro.
 	Systemd bool `toml:"systemd"`
 	// WSLG shows Linux GUI apps with WSLg. Set it to false to use X410
-	// instead, through a bridge service maisys sets up.
+	// instead: maisys then sets up x410.service, a systemd user service
+	// that forwards display :0 to X410 over VSOCK with socat, and sets
+	// DISPLAY to :0. That needs systemd, X410 listening on VSOCK, and WSLg
+	// turned off in Windows (guiApplications=false in .wslconfig).
 	WSLG bool `toml:"wslg"`
 	// AppendWindowsPath adds the Windows PATH to the end of the distro's
 	// PATH.
 	AppendWindowsPath bool `toml:"append_windows_path"`
 	// GitCredentialManager makes git use the Windows Git Credential
 	// Manager, so the distro shares the sign-ins Windows has. It needs Git
-	// for Windows.
+	// for Windows, in C:\Program Files\Git.
 	GitCredentialManager bool `toml:"git_credential_manager"`
 }

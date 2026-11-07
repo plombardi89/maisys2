@@ -61,3 +61,51 @@ func TestInstallFile(t *testing.T) {
 		t.Errorf("InstallFile() without a sudo session: error = %v, want ErrNeedsPassword", err)
 	}
 }
+
+func TestInstallFileChecked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("maisys only writes files as root on Linux")
+	}
+	const rule = "tester ALL=(ALL) NOPASSWD: ALL\n"
+	tests := []struct {
+		name     string
+		checkErr error
+		installs bool
+		wantErr  string
+	}{
+		{name: "the check passes", installs: true},
+		{name: "the check fails", checkErr: errors.New("syntax error"), wantErr: "didn't write /etc/sudoers.d/tester: syntax error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := systemtest.NewFakeRunner(t)
+			var installed string
+			f.On("install", func(_ context.Context, c system.Cmd) (system.Result, error) {
+				installed = c.Args[6]
+				return system.Result{}, nil
+			})
+			var checked string
+			check := func(_ context.Context, tmp string) error {
+				data, err := os.ReadFile(tmp)
+				if err != nil || string(data) != rule {
+					t.Errorf("the checked file has %q, %v; want the file's contents", data, err)
+				}
+				checked = tmp
+				return tt.checkErr
+			}
+
+			err := system.InstallFileChecked(t.Context(), f, []byte(rule), "/etc/sudoers.d/tester", 0o440, check)
+			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr) {
+				t.Errorf("InstallFileChecked() error = %v, want %q", err, tt.wantErr)
+			}
+			switch {
+			case checked == "":
+				t.Error("the file wasn't checked")
+			case tt.installs && installed != checked:
+				t.Errorf("installed %q, want the file that was checked, %q", installed, checked)
+			case !tt.installs && installed != "":
+				t.Errorf("installed %q after the check failed", installed)
+			}
+		})
+	}
+}

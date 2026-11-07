@@ -571,6 +571,51 @@ func TestReleasePackage(t *testing.T) {
 	}
 }
 
+func TestReleasePackageFind(t *testing.T) {
+	m := newTestMachine(t, config.Ubuntu)
+	t.Setenv("TMPDIR", t.TempDir())
+	const data = "a package"
+	url := packageServer(t, data)
+	found := 0
+	r := &ReleasePackage{Name: "steam", Package: "steam-launcher", Find: func(_ context.Context, rt *resource.Runtime) (string, string, error) {
+		if rt != m.rt {
+			t.Error("Find got another runtime")
+		}
+		found++
+		return url, sha256Of([]byte(data)), nil
+	}}
+	m.runner.On("dpkg-query -W", systemtest.Fail(1, "dpkg-query: no packages found matching steam-launcher\n"))
+	m.runner.On("apt-cache policy", systemtest.Respond(0, ""))
+	m.runner.On("apt-get update", systemtest.Respond(0, ""))
+	m.runner.On("apt-get install", func(_ context.Context, c system.Cmd) (system.Result, error) {
+		got, err := os.ReadFile(c.Args[len(c.Args)-1])
+		if err != nil || string(got) != data {
+			t.Errorf("installing: the package has %q, %v; want the one found", got, err)
+		}
+		return system.Result{}, nil
+	})
+
+	wantChange(t, "check", m.check(r), resource.Change{Action: resource.Create, Summary: "add repo steam (install steam-launcher)"})
+	if found != 0 {
+		t.Errorf("the check looked the package up %d times, want never", found)
+	}
+	m.apply(r)
+	if found != 1 {
+		t.Errorf("applying looked the package up %d times, want once", found)
+	}
+
+	r.Find = func(context.Context, *resource.Runtime) (string, string, error) {
+		return "", "", errors.New("valve's index has no steam-launcher")
+	}
+	if _, err := r.Apply(t.Context(), m.rt); err == nil || err.Error() != "finding steam-launcher: valve's index has no steam-launcher" {
+		t.Errorf("Apply() error = %v, want the lookup's", err)
+	}
+	r.Find = func(context.Context, *resource.Runtime) (string, string, error) { return url, "abc", nil }
+	if _, err := r.Apply(t.Context(), m.rt); err == nil || err.Error() != `finding steam-launcher: "abc" isn't a sha256` {
+		t.Errorf("Apply() error = %v, want the bad sha256", err)
+	}
+}
+
 func TestReleasePackageErrors(t *testing.T) {
 	m := newTestMachine(t, config.Fedora)
 	url := packageServer(t, "a package")

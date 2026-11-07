@@ -317,9 +317,9 @@ Works on Fedora and Ubuntu.
 |---|---|---|---|
 | `wsl.enabled` | boolean | `false` | `enabled` turns the module on. |
 | `wsl.systemd` | boolean | `true` | `systemd` runs systemd in the distro. |
-| `wsl.wslg` | boolean | `true` | `wslg` shows Linux GUI apps with WSLg. Set it to false to use X410 instead, through a bridge service maisys sets up. |
+| `wsl.wslg` | boolean | `true` | `wslg` shows Linux GUI apps with WSLg. Set it to false to use X410 instead: maisys then sets up x410.service, a systemd user service that forwards display :0 to X410 over VSOCK with socat, and sets DISPLAY to :0. That needs systemd, X410 listening on VSOCK, and WSLg turned off in Windows (guiApplications=false in .wslconfig). |
 | `wsl.append_windows_path` | boolean | `true` | `append_windows_path` adds the Windows PATH to the end of the distro's PATH. |
-| `wsl.git_credential_manager` | boolean | `false` | `git_credential_manager` makes git use the Windows Git Credential Manager, so the distro shares the sign-ins Windows has. It needs Git for Windows. |
+| `wsl.git_credential_manager` | boolean | `false` | `git_credential_manager` makes git use the Windows Git Credential Manager, so the distro shares the sign-ins Windows has. It needs Git for Windows, in C:\\Program Files\\Git. |
 
 ## winget
 

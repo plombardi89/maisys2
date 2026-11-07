@@ -25,6 +25,11 @@ type ReleasePackage struct {
 	// URL is where to download the package from, a .deb on Ubuntu and an
 	// .rpm on Fedora, and SHA256 the sha256 in hex the download must have.
 	URL, SHA256 string
+	// Find, if it's set, finds URL and SHA256 when the package is
+	// installed, for a package whose download changes, such as Valve's
+	// steam .deb: it looks them up in the vendor's own index of its
+	// packages. URL and SHA256 are left empty then.
+	Find func(ctx context.Context, rt *resource.Runtime) (url, sha256 string, err error)
 }
 
 var _ resource.Resource = (*ReleasePackage)(nil)
@@ -48,8 +53,11 @@ func (r *ReleasePackage) check(rt *resource.Runtime) error {
 	if rt.Facts == nil || (rt.Facts.OS != config.Ubuntu && rt.Facts.OS != config.Fedora) {
 		return fmt.Errorf("repo %s only works on Fedora and Ubuntu", r.Name)
 	}
-	if r.Package == "" || r.URL == "" {
+	if r.Package == "" || r.URL == "" && r.Find == nil {
 		return fmt.Errorf("repo %s needs the package's name and URL", r.Name)
+	}
+	if r.Find != nil {
+		return nil
 	}
 	return checkSHA256(r.SHA256)
 }
@@ -79,9 +87,18 @@ func (r *ReleasePackage) Apply(ctx context.Context, rt *resource.Runtime) (state
 	if err != nil {
 		return state.Record{}, err
 	}
-	data, err := download(ctx, r.URL, r.SHA256)
+	url, sum := r.URL, r.SHA256
+	if r.Find != nil {
+		if url, sum, err = r.Find(ctx, rt); err != nil {
+			return state.Record{}, fmt.Errorf("finding %s: %w", r.Package, err)
+		}
+		if err := checkSHA256(sum); err != nil {
+			return state.Record{}, fmt.Errorf("finding %s: %w", r.Package, err)
+		}
+	}
+	data, err := download(ctx, url, sum)
 	if err != nil {
-		return state.Record{}, fmt.Errorf("downloading %s from %s: %w", r.Package, r.URL, err)
+		return state.Record{}, fmt.Errorf("downloading %s from %s: %w", r.Package, url, err)
 	}
 	ext := ".rpm"
 	if rt.Facts.OS == config.Ubuntu {
