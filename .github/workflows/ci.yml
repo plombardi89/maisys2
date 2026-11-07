@@ -53,6 +53,22 @@ jobs:
       - name: Lint shell scripts and workflows
         run: make lint-shell lint-workflows
 
+  # PSScriptAnalyzer on install.ps1, in the Windows PowerShell 5.1 a fresh
+  # Windows 11 has, with the settings in PSScriptAnalyzerSettings.psd1, which
+  # also check that the script works in Windows PowerShell 5.1.
+  lint-powershell:
+    runs-on: windows-latest
+    env:
+      PSSCRIPTANALYZER_VERSION: 1.25.0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint install.ps1
+        shell: powershell
+        run: |
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force
+          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION
+          Invoke-ScriptAnalyzer -Path install.ps1 -Settings ./PSScriptAnalyzerSettings.psd1 -ReportSummary -EnableExit
+
   test:
     name: test (${{ matrix.os }})
     strategy:
@@ -72,6 +88,8 @@ jobs:
       - name: Test (with race detector)
         if: runner.os == 'Linux'
         run: go test -race ./...
+      # On Windows, this includes install.ps1's tests (test/install), which
+      # run it with Windows PowerShell.
       - name: Test
         if: runner.os != 'Linux'
         run: go test ./...

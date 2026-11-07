@@ -180,6 +180,17 @@ install = [""]
 			want: []string{"machines/box.toml:5:12: winget.install has an empty entry"},
 		},
 		{
+			name: "winget: not a package ID",
+			machine: `
+os = "windows"
+
+[winget]
+enabled = true
+install = ["Microsoft.WindowsTerminal", "Windows Terminal"]
+`,
+			want: []string{`machines/box.toml:5:41: winget.install lists "Windows Terminal", which isn't a winget package ID, such as "Microsoft.WindowsTerminal"`},
+		},
+		{
 			name: "hashicorp: an empty tool",
 			machine: `
 os = "fedora"

@@ -19,6 +19,7 @@ import (
 	"github.com/plombardi89/maisys2/internal/resource/tool"
 	"github.com/plombardi89/maisys2/internal/resource/unit"
 	"github.com/plombardi89/maisys2/internal/resource/uvtool"
+	"github.com/plombardi89/maisys2/internal/resource/winget"
 )
 
 // All returns the remover of every resource kind.
@@ -39,5 +40,6 @@ func All() resource.Removers {
 		uvtool.Remover{},
 		sudoers.Remover{},
 		cleanup.Remover{},
+		winget.Remover{},
 	)
 }

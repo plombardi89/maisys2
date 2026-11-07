@@ -17,7 +17,7 @@ var (
 	engineModules = []string{
 		"files", "golang", "golangci_lint", "hashicorp", "intellij", "kubectl", "legacy", "lnav", "mage",
 		"mutagen", "opencode", "packages", "podman", "protoc", "python_tools", "sdkman", "shell", "steam",
-		"stern", "sudo", "wsl", "yq",
+		"stern", "sudo", "winget", "wsl", "yq",
 	}
 	// shellContributors add to the shell environment (shells.Contributor).
 	shellContributors = []string{

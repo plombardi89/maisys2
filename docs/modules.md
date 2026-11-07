@@ -330,7 +330,7 @@ Works on Windows.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `winget.enabled` | boolean | `false` | `enabled` turns the module on. |
-| `winget.install` | list of strings | `[]` | `install` lists winget package IDs, such as "Microsoft.WindowsTerminal". Packages taken off the list aren't uninstalled. Git.Git is always installed, because maisys needs it. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `winget.install` | list of strings | `[]` | `install` lists packages from the winget source by their exact, case-sensitive ID, such as "Microsoft.WindowsTerminal" (winget search finds them). Each is kept at its latest version, and installed as you: an installer that needs admin rights asks for them. Packages taken off the list aren't uninstalled. Git.Git is always installed, system-wide, because maisys needs it. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
 
 ## wsl_host
 
