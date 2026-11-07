@@ -89,6 +89,29 @@ func (c *Config) Check(check *config.Check) {
 	for _, name := range slices.Sorted(maps.Keys(c.Distros)) {
 		checkDistro(check, name, c.Distros[name])
 	}
+	c.WSLConfig.check(check)
+}
+
+// sizePattern matches the sizes .wslconfig takes, such as "16GB".
+var sizePattern = regexp.MustCompile(`(?i)^[0-9]+(KB|MB|GB|TB)$`)
+
+// check checks the .wslconfig keys' values.
+func (w WSLConfig) check(check *config.Check) {
+	if w.Memory != "" && !sizePattern.MatchString(w.Memory) {
+		check.Errorf("wslconfig.memory", "must be a size such as \"16GB\" or \"512MB\", not %q", w.Memory)
+	}
+	if w.Swap != "" && w.Swap != "0" && !sizePattern.MatchString(w.Swap) {
+		check.Errorf("wslconfig.swap", "must be a size such as \"8GB\", or \"0\" for no swap file, not %q", w.Swap)
+	}
+	if _, set := check.Machine.Origins["wsl_host.wslconfig.processors"]; set && w.Processors < 1 {
+		check.Errorf("wslconfig.processors", "must be at least 1, not %d", w.Processors)
+	}
+	if w.NetworkingMode != "" && w.NetworkingMode != "nat" && w.NetworkingMode != "mirrored" {
+		check.Errorf("wslconfig.networking_mode", "must be \"nat\" or \"mirrored\", not %q", w.NetworkingMode)
+	}
+	if _, ok := reclaimValues[w.AutoMemoryReclaim]; w.AutoMemoryReclaim != "" && !ok {
+		check.Errorf("wslconfig.auto_memory_reclaim", "must be \"disabled\", \"gradual\" or \"dropcache\", not %q", w.AutoMemoryReclaim)
+	}
 }
 
 // isLocal reports whether rawURL is a folder on a Windows machine, as a

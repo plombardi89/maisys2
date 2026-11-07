@@ -155,7 +155,7 @@ func (r *ExecRunner) runAdmin(ctx context.Context, client *helperClient, c Cmd) 
 		return Result{ExitCode: -1}, fmt.Errorf("%s: %w", c.what(), err)
 	}
 
-	out := r.newOutput(line)
+	out := r.newOutput(line, c.Stream)
 	stdout, stderr := out.writers()
 	hr, err := client.run(ctx, req, stdout, stderr)
 	out.flush()

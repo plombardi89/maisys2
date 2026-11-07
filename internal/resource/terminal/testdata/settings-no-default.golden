@@ -1,0 +1,7 @@
+{
+    "defaultProfile": "{2d71752b-afa5-5775-8684-445c330bed79}",
+    // Settings with no default profile yet.
+    "$schema": "https://aka.ms/terminal-profiles-schema",
+    "copyOnSelect": false,
+    "profiles": { "list": [] },
+}

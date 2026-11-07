@@ -43,9 +43,10 @@ var symbolColor = map[resource.Action]string{
 // Render writes the plan for people to read, as sync shows it before
 // asking to apply it: the machine and system, the changes of each module
 // that has any, the removals under "prune", and a summary line. Modules
-// with nothing to change are left out; a module that failed shows its
-// errors instead of its changes, and one that's skipped says so. color
-// adds ANSI colours.
+// with nothing to change or show are left out; a module that failed shows
+// its errors instead of its changes, and one that's skipped says so. What
+// the config wants that something else looks after (resource.Present) is
+// shown too. color adds ANSI colours.
 func (p *Plan) Render(w io.Writer, color bool) {
 	r := &planWriter{color: color}
 	fmt.Fprintf(&r.b, "Plan for %s (%s)\n", p.Machine, p.system())
@@ -234,7 +235,7 @@ type planLine struct {
 }
 
 func (r *planWriter) paint(color, s string) string {
-	if !r.color {
+	if !r.color || color == "" {
 		return s
 	}
 	return color + s + reset
@@ -252,7 +253,7 @@ func (r *planWriter) add(indent int, color, colored, plain string, tagged bool) 
 	r.lines = append(r.lines, planLine{text: text, width: width, tagged: tagged})
 }
 
-// change adds a line for a change.
+// change adds a line for a change, and one for each of its further steps.
 func (r *planWriter) change(c resource.Change, summary string, privileged bool) {
 	switch c.Action {
 	case resource.Unknown:
@@ -263,6 +264,9 @@ func (r *planWriter) change(c resource.Change, summary string, privileged bool) 
 	}
 	tagged := privileged && c.Action.Applies()
 	r.add(2, symbolColor[c.Action], c.Action.Symbol(), summary, tagged)
+	for _, more := range c.More {
+		r.add(2, symbolColor[c.Action], c.Action.Symbol(), more, false)
+	}
 }
 
 // notes adds a line for each of a change's notes.
@@ -296,7 +300,7 @@ func (r *planWriter) module(m *ModulePlan) {
 		}
 	default:
 		for _, item := range m.Items {
-			if item.Change.Action.Applies() || item.Change.Action == resource.Orphan {
+			if a := item.Change.Action; a.Applies() || a == resource.Orphan || a == resource.Present {
 				r.change(item.Change, item.summary(), item.privileged())
 			}
 			r.notes(item.Change)

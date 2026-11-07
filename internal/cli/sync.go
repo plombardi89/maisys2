@@ -321,6 +321,8 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 		Now:      s.g.now,
 		Shared:   map[any]any{tool.EnvKey{}: tools},
 		RepoFS:   os.DirFS(s.repo.dir),
+		RepoDir:  s.repo.dir,
+		RepoURL:  s.repo.URL,
 	})
 	if err != nil {
 		if ctx.Err() != nil {

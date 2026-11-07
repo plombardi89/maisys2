@@ -1,0 +1,6 @@
+{
+    // Settings with no default profile yet.
+    "$schema": "https://aka.ms/terminal-profiles-schema",
+    "copyOnSelect": false,
+    "profiles": { "list": [] },
+}

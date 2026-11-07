@@ -87,6 +87,9 @@ type PlanInput struct {
 	Now func() time.Time
 	// RepoFS is the config repo's files.
 	RepoFS fs.FS
+	// RepoDir is the config repo's clone, and RepoURL the URL it's cloned
+	// from, if it has a remote.
+	RepoDir, RepoURL string
 	// Shared are values the resources share, made before the plan (see
 	// resource.Runtime.Shared).
 	Shared map[any]any
@@ -206,6 +209,8 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 			Machine:  in.Machine,
 			Modules:  in.Modules,
 			RepoFS:   in.RepoFS,
+			RepoDir:  in.RepoDir,
+			RepoURL:  in.RepoURL,
 			Previous: st.Get,
 			Log:      in.Log,
 			Now:      now,

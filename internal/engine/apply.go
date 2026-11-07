@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -92,10 +93,12 @@ type RemovalResult struct {
 // The state file is saved after every step. A step that fails makes its
 // module fail: the module's other changes and every module that depends on
 // it, directly or not, are skipped, as are the removals of their records,
-// and everything else carries on. Modules that failed in the plan count as
-// failed too. A step that needs a reboot (see resource.RebootNeeder) stops
-// its module in the same way, but without failing: what it stops waits for
-// the next sync, after the reboot.
+// and everything else carries on. A resource.Independent resource that
+// fails makes its module fail too, but the module's other changes are
+// still applied. Modules that failed in the plan count as failed too. A
+// step that needs a reboot (see resource.RebootNeeder) stops its module in
+// the same way, but without failing: what it stops waits for the next
+// sync, after the reboot.
 //
 // Changes of resources in a group (resource.Grouped), such as package
 // installs, are applied in one step, with one call to ApplyGroup, when the
@@ -242,7 +245,9 @@ func (a *applier) module(i int, mr *ModuleResult) {
 				return
 			}
 			if err := a.recheck(item); err != nil {
-				a.fail(m, k, mr, fmt.Errorf("%s: %w", item.summary(), err))
+				if a.fail(m, k, mr, item, err) {
+					continue
+				}
 				return
 			}
 		}
@@ -276,7 +281,9 @@ func (a *applier) module(i int, mr *ModuleResult) {
 			if a.res.Err != nil {
 				return
 			}
-			a.fail(m, k, mr, fmt.Errorf("%s: %w", item.summary(), err))
+			if a.fail(m, k, mr, item, err) {
+				continue
+			}
 			return
 		}
 		mr.Applied++
@@ -288,10 +295,22 @@ func (a *applier) module(i int, mr *ModuleResult) {
 	}
 }
 
-// fail makes module m fail at its item k with err.
-func (a *applier) fail(m *ModulePlan, k int, mr *ModuleResult, err error) {
-	mr.Err = err
+// fail makes module m fail at its item k, item, with err. It reports
+// whether the module's other changes are still applied, as they are when
+// item is a resource.Independent resource; otherwise the module stops.
+func (a *applier) fail(m *ModulePlan, k int, mr *ModuleResult, item *Item, err error) bool {
+	err = fmt.Errorf("%s: %w", item.summary(), err)
+	if mr.Err == nil {
+		mr.Err = err
+	} else {
+		mr.Err = errors.Join(mr.Err, err)
+	}
+	if resource.IsIndependent(item.Resource) {
+		a.stopped[m.Name] = m.Name
+		return true
+	}
 	a.stop(m, k, mr)
+	return false
 }
 
 // stop stops module m at its item k, which failed or needs a reboot,

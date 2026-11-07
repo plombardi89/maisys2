@@ -142,11 +142,13 @@ func TestRenderPlan(t *testing.T) {
 				e.windows()
 				e.machine.Name = "workbox-camwin"
 				e.add("winget", nil, res("winget:Microsoft.WindowsTerminal", resource.Create, "install Microsoft.WindowsTerminal"))
+				distro := res("wsl-distro:fedora-dev", resource.Create, "create distro fedora-dev (FedoraLinux-44), user phil")
+				distro.change.More = []string{"set up fedora-dev with Linux machine workbox-camwin-fc44"}
 				e.add("wsl_host", nil,
-					res("wsl:install", resource.Create, "install WSL").sudo().mayReboot(),
+					res("wsl", resource.Create, "install WSL").sudo().mayReboot(),
 					res("file:~/.wslconfig", resource.Create, "write ~\\.wslconfig (run `wsl --shutdown` to apply)"),
-					res("distro:fedora-dev", resource.Create, "create distro fedora-dev (FedoraLinux-44), user phil"),
-					res("distro-setup:fedora-dev", resource.Create, "set up fedora-dev with Linux machine workbox-camwin-fc44"),
+					distro,
+					res("wsl-distro:ubuntu-scratch", resource.Present, "distro ubuntu-scratch exists (synced from inside the distro)"),
 				)
 				e.add("windows_terminal", nil, res("terminal:default-profile", resource.Update, "default profile → fedora-dev"))
 			},

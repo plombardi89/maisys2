@@ -157,6 +157,34 @@ func TestRunLog(t *testing.T) {
 	}
 }
 
+// TestRunStream checks that a command's output also goes to its Stream as
+// it runs, and is still captured and logged, but isn't shown twice with
+// Verbose.
+func TestRunStream(t *testing.T) {
+	var log, verbose, stream bytes.Buffer
+	r := NewRunner(Options{Log: &log, Verbose: &verbose})
+	c := helperCmd(t, "exit", "0", "first\nno newline", "an error\n")
+	c.Stream = &stream
+	res, err := r.Run(t.Context(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first\n", "no newline\n", "an error\n"} {
+		if !strings.Contains(stream.String(), want) {
+			t.Errorf("stream doesn't contain the line %q:\n%s", want, stream.String())
+		}
+	}
+	if string(res.Stdout) != "first\nno newline" || string(res.Stderr) != "an error\n" {
+		t.Errorf("Stdout, Stderr = %q, %q; want them captured too", res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(log.String(), "an error\n") {
+		t.Errorf("log doesn't have the output:\n%s", log.String())
+	}
+	if want := "$ " + c.String() + "\n"; verbose.String() != want {
+		t.Errorf("verbose output = %q, want only the command line %q", verbose.String(), want)
+	}
+}
+
 // TestRunConcurrent runs commands at the same time, checking that each
 // one's entry in the log is in one piece.
 func TestRunConcurrent(t *testing.T) {
