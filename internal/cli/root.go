@@ -17,6 +17,7 @@ import (
 	"github.com/plombardi89/maisys2/internal/buildinfo"
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/facts"
+	"github.com/plombardi89/maisys2/internal/gitrepo"
 )
 
 // Exit codes returned by Execute.
@@ -54,6 +55,14 @@ type environment struct {
 	// goos is the OS maisys runs on, as a GOOS value. It decides where
 	// maisys keeps its files.
 	goos string
+	// gitEnv is extra environment for every git command maisys runs.
+	// Tests use it to keep git away from the real user's config.
+	gitEnv []string
+	// findGit returns the git binary's path (gitrepo.Find).
+	findGit func() (string, error)
+	// prompt asks for a config repo token in a terminal. It's nil when
+	// maisys can't ask questions.
+	prompt func(ctx context.Context, url string) (string, error)
 }
 
 // globalOptions holds settings that apply to every command, and the
@@ -105,6 +114,11 @@ func (g *globalOptions) liveSystem() (*facts.System, error) {
 // Execute runs the maisys command line with args (without the program name)
 // and returns the process exit code.
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	terminal := isTerminal(os.Stdin) && isTerminal(stdout)
+	var prompt func(ctx context.Context, url string) (string, error)
+	if terminal {
+		prompt = gitrepo.TerminalPrompt(os.Stdin, stdout)
+	}
 	return execute(ctx, args, &environment{
 		stdin:  os.Stdin,
 		stdout: stdout,
@@ -113,9 +127,11 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, geten
 		getwd:  os.Getwd,
 		detect: facts.Detect,
 		isTerminal: func() bool {
-			return isTerminal(os.Stdin) && isTerminal(stdout)
+			return terminal
 		},
-		goos: runtime.GOOS,
+		goos:    runtime.GOOS,
+		findGit: gitrepo.Find,
+		prompt:  prompt,
 	})
 }
 
