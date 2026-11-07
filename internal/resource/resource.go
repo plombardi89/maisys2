@@ -7,9 +7,11 @@ package resource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/plombardi89/maisys2/internal/config"
@@ -134,6 +136,36 @@ type Runtime struct {
 	Log io.Writer
 	// Now returns the current time.
 	Now func() time.Time
+
+	sharedMu sync.Mutex
+	shared   map[any]any
+}
+
+// Shared returns the value the resources of one sync share under key, such
+// as the package manager or the download client, making it with create the
+// first time it's asked for. A failed create isn't remembered.
+func (rt *Runtime) Shared(key any, create func() (any, error)) (any, error) {
+	rt.sharedMu.Lock()
+	defer rt.sharedMu.Unlock()
+	if v, ok := rt.shared[key]; ok {
+		return v, nil
+	}
+	v, err := create()
+	if err != nil {
+		return nil, err
+	}
+	rt.SetShared(key, v)
+	return v, nil
+}
+
+// SetShared sets the value shared under key, for callers that make it
+// before the sync plans: Shared returns it from then on. The caller must
+// not call it while resources may call Shared.
+func (rt *Runtime) SetShared(key, value any) {
+	if rt.shared == nil {
+		rt.shared = map[any]any{}
+	}
+	rt.shared[key] = value
 }
 
 // Resource is one thing a module manages. A module's resources are planned
@@ -185,6 +217,21 @@ type Remover interface {
 	// Remove removes the thing rec records. Its record is deleted once
 	// Remove succeeds.
 	Remove(ctx context.Context, rt *Runtime, rec state.Record) error
+}
+
+// SyncStopper is implemented by errors that stop the whole sync, rather
+// than fail only the module they happen in. A failed lookup of a "latest"
+// version is one: issue #1 says the sync stops, naming the tool and the
+// upstream.
+type SyncStopper interface {
+	StopsSync() bool
+}
+
+// StopsSync reports whether err, or an error it wraps, stops the whole
+// sync.
+func StopsSync(err error) bool {
+	var s SyncStopper
+	return errors.As(err, &s) && s.StopsSync()
 }
 
 // Removers holds the Remover for each kind of resource maisys removes,

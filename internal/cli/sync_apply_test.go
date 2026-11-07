@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,9 +18,11 @@ import (
 	"github.com/plombardi89/maisys2/internal/facts"
 	"github.com/plombardi89/maisys2/internal/gitrepo"
 	"github.com/plombardi89/maisys2/internal/resource"
+	"github.com/plombardi89/maisys2/internal/resource/pkg"
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/state"
 	"github.com/plombardi89/maisys2/internal/system"
+	"github.com/plombardi89/maisys2/internal/system/systemtest"
 )
 
 // fakeModule is a module whose resources a test scripts.
@@ -56,9 +59,13 @@ func (m *fakeModule) Resources(config.ModuleConfig, *resource.Runtime) ([]resour
 // fakeResource is a resource that's missing until it's applied: until then
 // its check finds something to create, and afterwards nothing to change.
 type fakeResource struct {
-	id         string
+	id string
+	// kind is the resource's kind; empty means "fake".
+	kind       string
 	privileged bool
 	applyErr   error
+	// checkErr, if set, makes the resource's check fail.
+	checkErr error
 	// onApply, if set, runs first when the resource is applied, with the
 	// step's context. An error it returns makes the step fail.
 	onApply func(ctx context.Context) error
@@ -68,12 +75,15 @@ type fakeResource struct {
 }
 
 func (r *fakeResource) ID() string        { return r.id }
-func (r *fakeResource) Kind() string      { return "fake" }
+func (r *fakeResource) Kind() string      { return cmp.Or(r.kind, "fake") }
 func (r *fakeResource) Targets() []string { return nil }
 func (r *fakeResource) Privileged() bool  { return r.privileged }
 
 func (r *fakeResource) Check(context.Context, *resource.Runtime) (resource.Change, error) {
 	r.checks.Add(1)
+	if r.checkErr != nil {
+		return resource.Change{}, r.checkErr
+	}
 	if r.applied.Load() {
 		return resource.Change{}, nil
 	}
@@ -855,4 +865,72 @@ func TestSyncSwitchSavedWhenApplied(t *testing.T) {
 		t.Fatalf("applying: exit code = %d, stderr:\n%s", code, stderr)
 	}
 	wantMachine("after applying", "box2")
+}
+
+func TestSyncRebootNotice(t *testing.T) {
+	const needsReboot = "Core libraries or services have been updated since boot-up:\n  * kernel\n\n" +
+		"Reboot is required to fully utilize these updates.\nMore information: https://access.redhat.com/solutions/27943\n"
+	tests := []struct {
+		name string
+		kind string
+		// restart answers dnf needs-restarting -r, if it's asked.
+		restart systemtest.Handler
+		notice  bool
+	}{
+		{name: "a package upgrade needs a reboot", kind: pkg.Kind, restart: systemtest.Respond(1, needsReboot), notice: true},
+		{name: "no reboot needed", kind: pkg.Kind, restart: systemtest.Respond(0, "No core libraries or services have been updated since boot-up.\nReboot should not be necessary.\n")},
+		{name: "needs-restarting is missing", kind: pkg.Kind, restart: systemtest.Fail(2, "Unknown argument \"needs-restarting\" for command \"dnf5\".\n")},
+		{name: "no package changes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			alpha := fake("packages", nil, "package:packages/jq")
+			alpha.resources[0].kind = tt.kind
+			e.useFakes(alpha)
+			if tt.restart != nil {
+				e.runner.On("dnf needs-restarting -r", tt.restart)
+			}
+
+			code, stdout, stderr := e.run("sync", "--local", "--yes")
+			want := "Applied 1 change.\n"
+			if tt.notice {
+				want += rebootNotice + "\n"
+			}
+			if code != exitOK || !strings.HasSuffix(stdout, want) || stderr != "" {
+				t.Errorf("exit code = %d, stdout:\n%s\nstderr:\n%s\nwant %d, and stdout to end with:\n%s", code, stdout, stderr, exitOK, want)
+			}
+			asked := slices.Contains(e.runner.Commands(), "dnf needs-restarting -r")
+			if asked != (tt.kind == pkg.Kind) {
+				t.Errorf("asked dnf needs-restarting: %t, want %t: only after package changes", asked, tt.kind == pkg.Kind)
+			}
+		})
+	}
+}
+
+// lookupError is a check error that stops the whole sync, like a failed
+// lookup of a "latest" version.
+type lookupError struct{}
+
+func (lookupError) Error() string   { return "can't find the latest version of beta's tool" }
+func (lookupError) StopsSync() bool { return true }
+
+func TestSyncStoppedByAFailedLookup(t *testing.T) {
+	for _, args := range [][]string{{"--dry-run"}, {"--yes"}} {
+		t.Run(args[0], func(t *testing.T) {
+			e := newTestEnv(t)
+			alpha := fake("alpha", nil, "fake:a")
+			beta := fake("beta", nil, "fake:b")
+			beta.resources[0].checkErr = lookupError{}
+			e.useFakes(alpha, beta)
+
+			code, _, stderr := e.run(append([]string{"sync", "--local"}, args...)...)
+			if code != exitError || !strings.Contains(stderr, "maisys: can't find the latest version of beta's tool\n") {
+				t.Errorf("exit code = %d, stderr:\n%s\nwant %d and the lookup error", code, stderr, exitError)
+			}
+			if alpha.resources[0].applied.Load() {
+				t.Error("alpha was applied, though a failed lookup stops the whole sync")
+			}
+		})
+	}
 }
