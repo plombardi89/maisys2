@@ -166,21 +166,31 @@ func (r *ExecRunner) StartSudo(ctx context.Context) error {
 		return s.err
 	}
 	opts := r.opts.Sudo
-	term := &terminal{stdin: opts.Stdin, stdout: opts.Stdout, stderr: opts.Stderr}
-	res, err := r.run(ctx, Cmd{Name: path, Args: []string{"-v"}, Label: "sudo -v", Interactive: true}, term)
-	if err != nil {
-		if _, ok := errors.AsType[*ExitError](err); !ok {
-			return fmt.Errorf("couldn't start sudo: %w", err)
+	// Where sudo already works without a password, as with a NOPASSWD
+	// rule, sudo -v isn't needed, and could even ask for one: by default,
+	// it only doesn't if every rule for the user is NOPASSWD, and a user in
+	// the wheel or sudo group has that group's rule too. sudo -n -v then
+	// only refreshes a password typed a while ago.
+	res, err := r.run(ctx, Cmd{Name: path, Args: []string{"-n", "true"}, Label: "sudo -n true", AllowExit: []int{1}}, nil)
+	if err == nil && res.ExitCode == 0 {
+		_, _ = r.run(ctx, Cmd{Name: path, Args: []string{"-n", "-v"}, Label: "sudo -n -v"}, nil)
+	} else {
+		term := &terminal{stdin: opts.Stdin, stdout: opts.Stdout, stderr: opts.Stderr}
+		res, err = r.run(ctx, Cmd{Name: path, Args: []string{"-v"}, Label: "sudo -v", Interactive: true}, term)
+		if err != nil {
+			if _, ok := errors.AsType[*ExitError](err); !ok {
+				return fmt.Errorf("couldn't start sudo: %w", err)
+			}
+			msg := sudoMessage(res)
+			if notAllowed(msg) {
+				s.checked, s.status, s.err = true, SudoNotAllowed, s.sudoError(SudoNotAllowed, msg)
+				return s.err
+			}
+			if msg == "" {
+				msg = fmt.Sprintf("exit code %d", res.ExitCode)
+			}
+			return fmt.Errorf("sudo couldn't check your password: %s", msg)
 		}
-		msg := sudoMessage(res)
-		if notAllowed(msg) {
-			s.checked, s.status, s.err = true, SudoNotAllowed, s.sudoError(SudoNotAllowed, msg)
-			return s.err
-		}
-		if msg == "" {
-			msg = fmt.Sprintf("exit code %d", res.ExitCode)
-		}
-		return fmt.Errorf("sudo couldn't check your password: %s", msg)
 	}
 	s.checked, s.status, s.err = true, SudoNoPassword, nil
 
