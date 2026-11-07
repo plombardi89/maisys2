@@ -33,6 +33,9 @@ maisys is a Go binary that sets up and maintains development machines (Fedora, U
 - `.golangci.yml` - Go linters and formatters (gofumpt, goimports).
 - `.goreleaser.yaml` - how release archives and checksums are built.
 - `install.sh` - the Linux installer and uninstaller, published with each release. It must stay a single self-contained bash script.
+- `test/fixture/` - the fixture config repo the end-to-end tests sync: `config init`'s output (its first commit), plus a `test-<distro>` machine for every supported distro (and Windows host machines for M9), with every version pinned. `go run ./test/cmd/fixture DIR` writes it. Its unit test runs `config validate --all` on it. When the support policy changes, update `fixture.Distros` with the CI matrix.
+- `test/e2e/` - end-to-end tests: a real `maisys sync` of the fixture in a systemd container for each distro (`make e2e [DISTRO=fedora-44] [SCENARIO=drift]`), then `sync --dry-run --local` must exit 0 and `test/verify.sh` checks the machine. Then the scenarios from issue #1 run in parallel, each in a container started from the synced one. Also the upgrade test (`make upgrade-test DRAFT=dist`), which the release workflow runs against the draft before publishing. They only run when `MAISYS_E2E` is set (the make targets set it), with podman (`PODMAN="sudo podman"` for rootful, as CI uses).
+- `test/signin/` - the private config repo sign-in test, run on pushes to `main` against the repo in the `MAISYS_FIXTURE_URL` variable with the `MAISYS_FIXTURE_TOKEN` secret (it passes with a notice while they aren't set up).
 - `test/install/` - Go tests for `install.sh`. They pipe it into bash against a fake release, with only the tools it's allowed to use on PATH. If `install.sh` needs a new command, add it to `baseTools` there.
 
 New packages go under `internal/`, following the layout in issue #1.
