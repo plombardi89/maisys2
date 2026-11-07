@@ -22,7 +22,7 @@ func (g *globalOptions) gitOptions(paths settings.Paths) (gitrepo.Options, error
 	if err != nil {
 		return gitrepo.Options{}, fmt.Errorf("%w\n%s", err, installGitHint(g.goos))
 	}
-	return gitrepo.Options{
+	opts := gitrepo.Options{
 		Git: git,
 		Env: g.gitEnv,
 		Auth: gitrepo.Auth{
@@ -30,8 +30,12 @@ func (g *globalOptions) gitOptions(paths settings.Paths) (gitrepo.Options, error
 			CredentialsFile: paths.CredentialsFile(),
 			Prompt:          g.prompt,
 		},
-		Progress: g.stderr,
-	}, nil
+	}
+	// Like every command's output, git's is only streamed with --verbose.
+	if g.verbose {
+		opts.Progress = g.stderr
+	}
+	return opts, nil
 }
 
 // installGitHint says how to install git, which maisys needs for the config
