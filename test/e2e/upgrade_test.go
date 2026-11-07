@@ -69,7 +69,7 @@ func TestUpgrade(t *testing.T) {
 	for _, d := range distros {
 		t.Run(d.Name(), func(t *testing.T) {
 			ctx := testContext(t)
-			m := &upgradeMachine{machine: startMachine(ctx, t, d), distro: d}
+			m := &upgradeMachine{machine: startMachine(ctx, t, buildImage(ctx, t, d), d, "upgrade"), distro: d}
 			m.copyDraft(ctx, dir, draft)
 			m.installPrevious(ctx, previous)
 			version := m.maisysVersion(ctx)
