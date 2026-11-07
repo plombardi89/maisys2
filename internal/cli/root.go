@@ -31,6 +31,9 @@ const (
 	exitError = 1
 	// exitChanges is sync --dry-run's exit code when the plan has changes.
 	exitChanges = 2
+	// exitReboot is sync's exit code when a change needs a reboot (on
+	// Windows) before the rest can be applied.
+	exitReboot = 3
 )
 
 var errNotImplemented = errors.New("not implemented yet")
@@ -86,6 +89,12 @@ type environment struct {
 	// newRunner returns the runner for a sync's commands
 	// (system.NewRunner).
 	newRunner func(opts system.Options) system.Runner
+	// detectWindows detects a Windows host's details, running commands
+	// with the runner it's given (facts.DetectWindows).
+	detectWindows func(ctx context.Context, r system.Runner) (*facts.Windows, error)
+	// serveHelper runs the elevated helper on Windows, connected to the
+	// pipe it's given (system.ServeElevated).
+	serveHelper func(ctx context.Context, pipe, secret string) error
 }
 
 // globalOptions holds settings that apply to every command, and the
@@ -174,6 +183,8 @@ func processEnvironment(abort <-chan struct{}, stdout, stderr io.Writer, getenv 
 		newRunner: func(opts system.Options) system.Runner {
 			return system.NewRunner(opts)
 		},
+		detectWindows: facts.DetectWindows,
+		serveHelper:   system.ServeElevated,
 	}
 }
 
@@ -224,6 +235,7 @@ and keeps it up to date with "maisys sync".`,
 		newSyncCommand(g),
 		newConfigCommand(g),
 		newStatusCommand(g),
+		newHelperCommand(g),
 	)
 	return root
 }

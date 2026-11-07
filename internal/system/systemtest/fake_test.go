@@ -188,3 +188,27 @@ func checkSudoError(t *testing.T, what string, err error, want bool, status syst
 		t.Errorf("%s error = %#v, want a *system.SudoError for %s", what, err, status)
 	}
 }
+
+// TestAdmin checks the fake runner on Windows, where a command to run as
+// admin outside the session (the elevated helper) fails with ErrNeedsAdmin.
+func TestAdmin(t *testing.T) {
+	f := NewFakeRunner(t)
+	f.SudoStatus, f.OS = system.SudoNeedsPassword, config.Windows
+	f.On("wsl.exe --install", Respond(0, ""))
+	c := system.Cmd{Name: "wsl.exe", Args: []string{"--install", "--no-distribution"}, Root: true, Label: "installing WSL"}
+
+	_, err := f.Run(t.Context(), c)
+	if !errors.Is(err, system.ErrNeedsAdmin) || !errors.Is(err, system.ErrNeedsPassword) || !strings.HasPrefix(err.Error(), "installing WSL: ") {
+		t.Errorf("Run() as admin without the helper: error = %v, want ErrNeedsAdmin naming the command", err)
+	}
+	if err := f.StartSudo(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Run(t.Context(), c); err != nil {
+		t.Errorf("Run() as admin in the helper: error = %v", err)
+	}
+	f.StopSudo()
+	if got := f.RootCommands(); len(got) != 1 {
+		t.Errorf("commands run as admin = %q, want one", got)
+	}
+}

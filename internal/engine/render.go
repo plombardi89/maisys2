@@ -152,13 +152,38 @@ func (p *Plan) summary() string {
 	}
 	s := strings.Join(parts, ", ") + "."
 	if p.NeedsPrivileges() {
-		if p.OS == config.Windows {
-			s += " Needs admin."
-		} else {
+		switch {
+		case p.OS != config.Windows:
 			s += " Needs sudo."
+		case p.uacPrompt():
+			s += " Needs admin (1 UAC prompt)."
+		default:
+			s += " Needs admin."
 		}
 	}
+	if p.mayReboot() {
+		s += " A reboot may be needed."
+	}
 	return s
+}
+
+// uacPrompt reports whether applying the changes that need admin rights on
+// Windows shows a UAC prompt: unless maisys is elevated already, they run
+// in the elevated helper, which needs one.
+func (p *Plan) uacPrompt() bool {
+	f := p.rt.Facts
+	return f != nil && f.Windows != nil && !f.Windows.Elevated
+}
+
+// mayReboot reports whether a change that will be applied may need a
+// reboot.
+func (p *Plan) mayReboot() bool {
+	for _, m := range p.Modules {
+		if m.applies() && slices.ContainsFunc(m.Items, func(item *Item) bool { return item.Change.Action.Applies() && item.Change.MayReboot }) {
+			return true
+		}
+	}
+	return false
 }
 
 // failedSummary says which modules failed in the plan and which removals

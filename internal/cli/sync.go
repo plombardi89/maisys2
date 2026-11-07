@@ -56,7 +56,9 @@ or no remote.
 
 With --dry-run, sync only shows the plan. It exits with 0 if there's nothing
 to change and 2 if there is. Otherwise, the exit code is 0 if the sync worked
-and 1 if anything failed.`,
+and 1 if anything failed. On Windows, if a change such as installing WSL
+needs a reboot, what depends on it waits, and sync exits with 3: reboot, then
+run maisys sync again.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := &syncRun{g: g, cmd: cmd, opts: &opts, warned: map[string]bool{}}
@@ -291,6 +293,12 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 		opts.Verbose = errOut
 	}
 	runner := s.g.newRunner(opts)
+	if err := s.detectWindows(sys, runner, log); err != nil {
+		if ctx.Err() != nil {
+			return errInterrupted
+		}
+		return err
+	}
 	// Reading the caches now means one written by a newer maisys stops the
 	// sync before it plans anything.
 	tools := tool.NewEnv(s.paths, "maisys/"+buildinfo.Version())
@@ -398,7 +406,9 @@ func (s *syncRun) confirm() (bool, error) {
 // and shows what happened, including whether the live system sys
 // recommends a reboot, which it asks with runner. A plan with nothing to
 // change is applied too, which records the sync and forgets things that
-// are already gone, but quietly, unless something failed.
+// are already gone, but quietly, unless something failed. If a change
+// needs a reboot before the rest can be applied, it stops with
+// exitReboot.
 func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log, runner system.Runner, sys *facts.System) error {
 	ctx, out := s.cmd.Context(), s.cmd.OutOrStdout()
 	changes := p.HasChanges()
@@ -433,6 +443,9 @@ func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log, run
 	}
 	if code := res.ExitCode(); code != exitOK {
 		return exitCodeError{code: code}
+	}
+	if res.RebootNeeded() {
+		return exitCodeError{code: exitReboot}
 	}
 	return nil
 }

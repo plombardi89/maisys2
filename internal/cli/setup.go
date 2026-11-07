@@ -22,9 +22,10 @@ var errNotSetUp = errors.New("this machine isn't set up for maisys yet: run `mai
 	"`maisys sync --dir PATH` to use a clone you already have, or `maisys config init` to start a new config repo")
 
 // findRepo finds the config repo for this run. On the first run, it
-// installs git if it's missing, then clones CONFIG-URL or uses the clone
-// given with --dir. On later runs, it's the one in the local settings,
-// unless CONFIG-URL or --dir names another one to switch to.
+// checks that a Windows host is ready for maisys, installs git if it's
+// missing, then clones CONFIG-URL or uses the clone given with --dir. On
+// later runs, it's the one in the local settings, unless CONFIG-URL or
+// --dir names another one to switch to.
 func (s *syncRun) findRepo() error {
 	paths := s.paths
 	dir, err := s.g.absPath(s.opts.dir, paths.Home)
@@ -44,6 +45,9 @@ func (s *syncRun) findRepo() error {
 	case errors.Is(err, settings.ErrNoSettings):
 		if s.url == "" && dir == "" {
 			return errNotSetUp
+		}
+		if err := s.preflight(); err != nil {
+			return err
 		}
 		if err := s.installGit(); err != nil {
 			return err
