@@ -94,6 +94,8 @@ func helper(args []string) int {
 //   - nopasswd: sudo works without a password
 //   - password: sudo needs the password "secret", unless the file named by
 //     FAKE_SUDO_STAMP exists; reading the password creates it
+//   - rule: sudo runs commands without a password, through a NOPASSWD
+//     rule, but sudo -v asks for one, because of the user's group's rule
 //   - notallowed: the user may not use sudo
 //   - broken: sudo fails as it does on a nosuid file system
 func fakeSudo(args []string) int {
@@ -168,6 +170,19 @@ options:
 			if err := os.WriteFile(stamp, nil, 0o600); err != nil {
 				return 99
 			}
+		}
+	case "rule":
+		// A NOPASSWD rule for the user, besides their group's rule, which
+		// needs a password: commands run without one, but sudo -v asks for
+		// it, as it does unless every rule is NOPASSWD.
+		if validate && nonInteractive {
+			fmt.Fprintln(os.Stderr, "sudo: a password is required")
+			return 1
+		}
+		if validate {
+			readPassword()
+			fmt.Fprintln(os.Stderr, "sudo: 1 incorrect password attempt")
+			return 1
 		}
 	}
 	if validate || list {

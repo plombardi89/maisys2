@@ -250,6 +250,31 @@ func TestStartSudo(t *testing.T) {
 	}
 }
 
+// TestStartSudoWithoutPassword checks that a session where sudo works
+// without a password starts without sudo -v, which might ask for one: with
+// a NOPASSWD rule for the user and their group's rule, which needs a
+// password, sudo -v does.
+func TestStartSudoWithoutPassword(t *testing.T) {
+	sudo := useFakeSudo(t, "rule")
+	var stderr bytes.Buffer
+	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader(""), Stderr: &stderr}})
+	t.Cleanup(r.StopSudo)
+
+	if err := r.StartSudo(t.Context()); err != nil {
+		t.Fatalf("StartSudo() error = %v", err)
+	}
+	if n := sudo.count(t, "-v"); n != 0 {
+		t.Errorf("sudo -v ran %d times, want never", n)
+	}
+	if stderr.Len() > 0 {
+		t.Errorf("sudo wrote to the terminal: %q", stderr.String())
+	}
+	res, err := r.Run(t.Context(), Cmd{Name: "echo", Args: []string{"as root"}, Root: true})
+	if err != nil || string(res.Stdout) != "as root\n" {
+		t.Errorf("Run() as root in the session = %q, %v", res.Stdout, err)
+	}
+}
+
 // TestSudoInForeground checks that sudo -v, which may ask for a password,
 // runs where the terminal's Ctrl-C reaches it, and that commands run as
 // root and the session's refreshes don't.

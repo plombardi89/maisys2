@@ -93,9 +93,10 @@ type SudoRunner interface {
 	// run as root to fix that; any other error means sudo couldn't be
 	// checked or doesn't work.
 	CheckSudo(ctx context.Context) (SudoStatus, error)
-	// StartSudo starts the session that applying runs in: it runs sudo -v,
-	// the only command that may ask for a password, and keeps sudo's
-	// session alive until StopSudo or until ctx is done.
+	// StartSudo starts the session that applying runs in: unless sudo
+	// already works without a password, it runs sudo -v, the only command
+	// that may ask for one, and it keeps sudo's session alive until
+	// StopSudo or until ctx is done.
 	StartSudo(ctx context.Context) error
 	// StopSudo stops keeping the session alive.
 	StopSudo()
