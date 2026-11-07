@@ -3,7 +3,6 @@ package winget
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -444,7 +443,20 @@ func TestApply(t *testing.T) {
 				t.Fatalf("Check = %+v, %v; want a change", c, err)
 			}
 			rec, err := r.Apply(t.Context(), s.rt)
+			rn, ok := r.(resource.RebootNeeder)
+			if !ok {
+				t.Fatal("a winget package doesn't implement resource.RebootNeeder")
+			}
+			why, needed := rn.RebootNeeded()
+			if needed != tt.reboot {
+				t.Errorf("reboot needed = %t (%q), want %t", needed, why, tt.reboot)
+			}
 			switch {
+			case tt.reboot:
+				// A restart isn't a failure: the sync stops for it.
+				if err != nil || !strings.Contains(why, tt.wantErr) {
+					t.Fatalf("Apply = %v, reboot reason %q; want no error and a reason containing %q", err, why, tt.wantErr)
+				}
 			case tt.wantErr != "":
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Apply error = %v, want one containing %q", err, tt.wantErr)
@@ -455,10 +467,6 @@ func TestApply(t *testing.T) {
 				if rec.Details["id"] != tt.spec.ID {
 					t.Errorf("record = %+v, want the package's ID in it", rec)
 				}
-			}
-			var rebooter interface{ RebootRequired() bool }
-			if got := errors.As(fmt.Errorf("wrapped: %w", err), &rebooter) && rebooter.RebootRequired(); got != tt.reboot {
-				t.Errorf("reboot required = %t, want %t (error %v)", got, tt.reboot, err)
 			}
 			if tt.wantCmd != "" {
 				cmds := s.commands()
