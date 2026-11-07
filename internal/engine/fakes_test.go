@@ -68,12 +68,13 @@ func (configOnly) NewConfig() config.ModuleConfig { return &config.Toggle{} }
 
 // fakeResource is a resource whose check finds change, or checkErr.
 type fakeResource struct {
-	id, kind   string
-	privileged bool
-	targets    []string
-	change     resource.Change
-	checkErr   error
-	applyErr   error
+	id, kind    string
+	privileged  bool
+	independent bool
+	targets     []string
+	change      resource.Change
+	checkErr    error
+	applyErr    error
 	// onCheck and onApply, if set, replace the check and apply.
 	onCheck func(ctx context.Context, rt *resource.Runtime) (resource.Change, error)
 	onApply func(ctx context.Context, rt *resource.Runtime) (state.Record, error)
@@ -102,6 +103,7 @@ func (r *fakeResource) ID() string        { return r.id }
 func (r *fakeResource) Kind() string      { return cmp.Or(r.kind, "fake") }
 func (r *fakeResource) Targets() []string { return r.targets }
 func (r *fakeResource) Privileged() bool  { return r.privileged }
+func (r *fakeResource) Independent() bool { return r.independent }
 
 func (r *fakeResource) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if r.onCheck != nil {

@@ -57,6 +57,11 @@ type Cmd struct {
 	// them itself when their context is cancelled. They mustn't read from
 	// the terminal.
 	Interactive bool
+	// Stream, if set, also receives the command's output and error
+	// output as it runs, a line at a time, for a command you watch, such
+	// as the first sync inside a new WSL distro. Both are still captured
+	// and logged.
+	Stream io.Writer
 }
 
 // String returns the command line, quoted for a POSIX shell where needed.
@@ -266,7 +271,7 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 		cmd.Stdout = term.stdout
 		cmd.Stderr = multiWriter(term.stderr, &out.stderr, &out.combined)
 	} else {
-		out = r.newOutput(line)
+		out = r.newOutput(line, c.Stream)
 		cmd.Stdout, cmd.Stderr = out.writers()
 	}
 
@@ -334,11 +339,26 @@ type output struct {
 
 // newOutput returns where the output of the command line goes. With
 // Verbose, it writes the command line there first.
-func (r *ExecRunner) newOutput(line string) *output {
+func (r *ExecRunner) newOutput(line string, stream io.Writer) *output {
 	out := &output{}
+	// Where the output also goes as it runs, a line at a time: the
+	// command's Stream, or with Verbose, there. Not both, which would show
+	// it twice.
+	var watch func([]byte)
 	if r.opts.Verbose != nil {
 		r.verbose([]byte("$ " + line + "\n"))
-		out.streams = []*lineWriter{{write: r.verbose}, {write: r.verbose}}
+		watch = r.verbose
+	}
+	if stream != nil {
+		var mu sync.Mutex
+		watch = func(p []byte) {
+			mu.Lock()
+			defer mu.Unlock()
+			_, _ = stream.Write(p)
+		}
+	}
+	if watch != nil {
+		out.streams = []*lineWriter{{write: watch}, {write: watch}}
 	}
 	return out
 }

@@ -7,7 +7,8 @@ wsl_host
   + write ~\.wslconfig (run `wsl --shutdown` to apply)
   + create distro fedora-dev (FedoraLinux-44), user phil
   + set up fedora-dev with Linux machine workbox-camwin-fc44
+  = distro ubuntu-scratch exists (synced from inside the distro)
 windows_terminal
   ~ default profile → fedora-dev
 
-6 to change. Needs admin (1 UAC prompt). A reboot may be needed.
+5 to change. Needs admin (1 UAC prompt). A reboot may be needed.

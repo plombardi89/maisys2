@@ -48,6 +48,11 @@ const (
 	// removes, such as an OS package or a package repo ("?"). The plan says
 	// it's no longer used, and it's left in place.
 	Orphan
+	// Present is something the config wants that's there already, and
+	// that something other than this sync looks after ("="), such as a
+	// WSL distro, which is synced from inside. The plan shows it, but it
+	// isn't applied.
+	Present
 )
 
 // Symbol returns the action's symbol in the plan, or "" for NoChange.
@@ -63,6 +68,8 @@ func (a Action) Symbol() string {
 		return "!"
 	case Unknown, Orphan:
 		return "?"
+	case Present:
+		return "="
 	default:
 		return ""
 	}
@@ -85,6 +92,8 @@ func (a Action) String() string {
 		return "unknown"
 	case Orphan:
 		return "orphan"
+	case Present:
+		return "present"
 	default:
 		return fmt.Sprintf("Action(%d)", int(a))
 	}
@@ -108,6 +117,10 @@ type Change struct {
 	// Summary says what changes, in a few words, such as "install jq" or
 	// "toolchain 1.27.3 → 1.27.4 (latest)". Empty means the resource's ID.
 	Summary string
+	// More are further steps of the same change, each shown on a line of
+	// its own under Summary, with the same symbol, such as setting up a
+	// WSL distro once it's created.
+	More []string
 	// Notes are warnings the plan shows under the change, even if Action is
 	// NoChange, such as "fish: sdkman has no fish integration (skipped)".
 	Notes []string
@@ -140,12 +153,21 @@ type Runtime struct {
 	// RepoFS is the config repo's files, such as the files module's
 	// sources and the shells' snippets. It may be nil in tests.
 	RepoFS fs.FS
+	// RepoDir is the config repo's clone, and RepoURL the URL it's cloned
+	// from, if it has a remote. New WSL distros clone the config from
+	// there.
+	RepoDir, RepoURL string
 	// Previous returns the state file's record of the resource with the
 	// given ID, as the last sync that applied it left it, and whether
 	// there is one.
 	Previous func(id string) (state.Record, bool)
 	// Log receives notes for the run's log. It may be nil.
 	Log io.Writer
+	// Out is the terminal, for what a step shows you as it runs, such as
+	// the first sync inside a new WSL distro, and what's shown only once,
+	// such as its user's password. It's never the log. It's nil while
+	// planning, and may be nil while applying.
+	Out io.Writer
 	// Now returns the current time.
 	Now func() time.Time
 
@@ -211,6 +233,23 @@ type Resource interface {
 	// state file; the engine fills in its ID, Kind, Module, and Paths and
 	// Updated if they're empty.
 	Apply(ctx context.Context, rt *Runtime) (state.Record, error)
+}
+
+// Independent is implemented by resources whose failure doesn't stop the
+// rest of their module, such as a WSL distro: one distro that can't be set
+// up doesn't stop the others from being created. The module still fails,
+// so the modules that depend on it are skipped.
+type Independent interface {
+	Resource
+	// Independent reports whether the module's later changes are applied
+	// even if this one fails.
+	Independent() bool
+}
+
+// IsIndependent reports whether r is Independent.
+func IsIndependent(r Resource) bool {
+	i, ok := r.(Independent)
+	return ok && i.Independent()
 }
 
 // Remover removes things of one kind once they're taken out of the config,

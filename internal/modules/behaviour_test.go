@@ -12,12 +12,12 @@ import (
 // What each module does beyond its config. A module that gains resources
 // or a shell environment is added here, in alphabetical order.
 var (
-	// engineModules have resources (engine.Module). The Windows modules
-	// gain theirs in M9.
+	// engineModules have resources (engine.Module). winget gains its own
+	// in M9.
 	engineModules = []string{
 		"files", "golang", "golangci_lint", "hashicorp", "intellij", "kubectl", "legacy", "lnav", "mage",
 		"mutagen", "opencode", "packages", "podman", "protoc", "python_tools", "sdkman", "shell", "steam",
-		"stern", "sudo", "winget", "wsl", "yq",
+		"stern", "sudo", "windows_terminal", "winget", "wsl", "wsl_host", "yq",
 	}
 	// shellContributors add to the shell environment (shells.Contributor).
 	shellContributors = []string{

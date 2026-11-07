@@ -506,6 +506,29 @@ func TestPlanRuntime(t *testing.T) {
 	}
 }
 
+// TestPlanPresent checks that what's there already, and looked after by
+// something else, is shown but isn't a change, as a dry run's exit code
+// needs.
+func TestPlanPresent(t *testing.T) {
+	e := newTestEnv(t)
+	e.windows()
+	e.machine.Name = "workbox-camwin"
+	e.add("wsl_host", nil, res("wsl-distro:fedora-dev", resource.Present, "distro fedora-dev exists (synced from inside the distro)").sudo())
+	p := e.plan()
+	if p.HasChanges() || p.NeedsPrivileges() || p.Failed() {
+		t.Errorf("HasChanges(), NeedsPrivileges(), Failed() = %t, %t, %t; want false", p.HasChanges(), p.NeedsPrivileges(), p.Failed())
+	}
+	var b strings.Builder
+	p.Render(&b, false)
+	want := "Plan for workbox-camwin (windows 11 26100, amd64)\n\nwsl_host\n  = distro fedora-dev exists (synced from inside the distro)\n\nNothing to change.\n"
+	if b.String() != want {
+		t.Errorf("Render() =\n%s\nwant\n%s", b.String(), want)
+	}
+	if result := e.apply(t.Context()); !result.OK() || len(e.steps.get()) > 0 {
+		t.Errorf("applying the plan applied %q", e.steps.get())
+	}
+}
+
 func TestPlanWithoutModulesWithResources(t *testing.T) {
 	e := newTestEnv(t)
 	e.modules = []config.Module{configOnly{"golang"}, configOnly{"files"}}

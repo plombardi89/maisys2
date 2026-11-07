@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -355,6 +356,66 @@ func TestApplyFailureIsolation(t *testing.T) {
 	}
 	if e.store.LastSyncResult != state.ResultFailed {
 		t.Errorf("LastSyncResult = %q, want %q", e.store.LastSyncResult, state.ResultFailed)
+	}
+}
+
+// TestApplyIndependentFailures checks that a resource that fails on its
+// own (resource.Independent), such as a WSL distro, makes its module fail
+// without stopping the module's other changes, and that steps can show
+// things on the terminal.
+func TestApplyIndependentFailures(t *testing.T) {
+	e := newTestEnv(t)
+	e.windows()
+	distro := func(name string, err error) *fakeResource {
+		r := res("wsl-distro:"+name, resource.Create, "create distro "+name)
+		r.independent, r.applyErr = true, err
+		return r
+	}
+	fedora := distro("fedora", nil)
+	fedora.onApply = func(_ context.Context, rt *resource.Runtime) (state.Record, error) {
+		_, _ = io.WriteString(rt.Out, "first sync in fedora\n")
+		return state.Record{}, nil
+	}
+	e.add("wsl_host", nil,
+		res("wsl", resource.NoChange, ""),
+		distro("broken", errors.New("wsl --install failed")),
+		fedora,
+		distro("ubuntu", errors.New("the first sync failed")),
+		res("wsl-default", resource.Update, "default distro → fedora"),
+	)
+	e.add("windows_terminal", []string{"wsl_host"}, res("terminal-profile", resource.Update, "default profile → fedora"))
+	e.add("files", nil, res("file:~/notes.txt", resource.Create, "~/notes.txt"))
+
+	var out bytes.Buffer
+	result := Apply(t.Context(), e.plan(), ApplyInput{Store: e.store, Out: &out})
+	want := []string{
+		"apply wsl-distro:broken",
+		"apply wsl-distro:fedora",
+		"apply wsl-distro:ubuntu",
+		"apply wsl-default",
+		"apply file:~/notes.txt",
+	}
+	if got := e.steps.get(); !slices.Equal(got, want) {
+		t.Errorf("steps =\n%q\nwant\n%q", got, want)
+	}
+	if out.String() != "first sync in fedora\n" {
+		t.Errorf("the terminal got %q, want what the fedora step wrote", out.String())
+	}
+
+	var b bytes.Buffer
+	result.Render(&b)
+	wantOut := "Applied 3 changes.\n" +
+		"wsl_host failed: create distro broken: wsl --install failed\n" +
+		"  create distro ubuntu: the first sync failed\n" +
+		"windows_terminal skipped because wsl_host failed.\n"
+	if b.String() != wantOut {
+		t.Errorf("Render() =\n%s\nwant\n%s", b.String(), wantOut)
+	}
+	if result.ExitCode() != 1 {
+		t.Errorf("ExitCode() = %d, want 1", result.ExitCode())
+	}
+	if got, want := e.ids(), []string{"file:~/notes.txt", "wsl-default", "wsl-distro:fedora"}; !slices.Equal(got, want) {
+		t.Errorf("records = %q, want %q", got, want)
 	}
 }
 

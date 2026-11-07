@@ -61,6 +61,12 @@ func DefaultReleaseURL(repo string) string {
 	return "https://github.com/" + repo + "/releases/latest/download"
 }
 
+// ReleaseURL returns the base URL of the files of the release of version
+// (without a leading "v") in a GitHub repo (owner/name).
+func ReleaseURL(repo, version string) string {
+	return "https://github.com/" + repo + "/releases/download/v" + version
+}
+
 // Executable returns the path of the running binary, with symlinks resolved.
 func Executable() (string, error) {
 	exe, err := os.Executable()
@@ -91,6 +97,13 @@ func (u *Updater) Update(ctx context.Context) (Release, bool, error) {
 
 // Latest returns the latest release's archive for u.OS and u.Arch.
 func (u *Updater) Latest(ctx context.Context) (Release, error) {
+	return u.Find(ctx, "")
+}
+
+// Find returns the archive for u.OS and u.Arch of the given version (without
+// a leading "v") that checksums.txt at u.ReleaseURL lists, or the first one
+// it lists if version is "".
+func (u *Updater) Find(ctx context.Context, version string) (Release, error) {
 	data, err := u.fetch(ctx, "checksums.txt")
 	if err != nil {
 		return Release{}, err
@@ -108,14 +121,20 @@ func (u *Updater) Latest(ctx context.Context) (Release, error) {
 		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
 			continue
 		}
-		version := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
-		if !semver.IsValid("v" + version) {
+		v := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+		if !semver.IsValid("v" + v) {
 			return Release{}, fmt.Errorf("checksums.txt lists %s, which has an invalid version", name)
 		}
-		return Release{Version: version, Archive: name, SHA256: sum}, nil
+		if version != "" && v != version {
+			continue
+		}
+		return Release{Version: v, Archive: name, SHA256: sum}, nil
 	}
 	if err := scanner.Err(); err != nil {
 		return Release{}, fmt.Errorf("reading checksums.txt: %w", err)
+	}
+	if version != "" {
+		return Release{}, fmt.Errorf("the release has no archive of maisys %s for %s/%s", version, u.OS, u.Arch)
 	}
 	return Release{}, fmt.Errorf("the latest release has no archive for %s/%s", u.OS, u.Arch)
 }
@@ -123,20 +142,44 @@ func (u *Updater) Latest(ctx context.Context) (Release, error) {
 // Install downloads rel, verifies its checksum and replaces u.Executable with
 // the binary inside it.
 func (u *Updater) Install(ctx context.Context, rel Release) error {
-	data, err := u.fetch(ctx, rel.Archive)
+	bin, err := u.Binary(ctx, rel)
 	if err != nil {
 		return err
 	}
+	return replace(u.Executable, bin)
+}
+
+// Binary downloads rel, verifies its checksum, and returns the maisys binary
+// inside it.
+func (u *Updater) Binary(ctx context.Context, rel Release) ([]byte, error) {
+	data, err := u.fetch(ctx, rel.Archive)
+	if err != nil {
+		return nil, err
+	}
+	return Unpack(data, rel)
+}
+
+// Unpack verifies that data, the archive of rel, has rel's checksum, and
+// returns the maisys binary inside it.
+func Unpack(data []byte, rel Release) ([]byte, error) {
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, rel.SHA256) {
-		return fmt.Errorf("checksum mismatch for %s (expected %s, got %s)", rel.Archive, rel.SHA256, got)
+		return nil, fmt.Errorf("checksum mismatch for %s (expected %s, got %s)", rel.Archive, rel.SHA256, got)
 	}
-
-	bin, err := extract(data, rel.Archive, binaryName(u.OS))
+	goos := "linux"
+	if strings.HasSuffix(rel.Archive, ".zip") {
+		goos = "windows"
+	}
+	bin, err := extract(data, rel.Archive, binaryName(goos))
 	if err != nil {
-		return fmt.Errorf("unpacking %s: %w", rel.Archive, err)
+		return nil, fmt.Errorf("unpacking %s: %w", rel.Archive, err)
 	}
-	return replace(u.Executable, bin)
+	return bin, nil
+}
+
+// Fetch downloads the named file of the release at u.ReleaseURL.
+func (u *Updater) Fetch(ctx context.Context, name string) ([]byte, error) {
+	return u.fetch(ctx, name)
 }
 
 // fetch downloads the named file from u.ReleaseURL.

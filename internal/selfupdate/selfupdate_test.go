@@ -127,6 +127,37 @@ func TestLatest(t *testing.T) {
 	})
 }
 
+// TestFind finds the archive of a version for another platform, and gets
+// the binary inside it, as the Linux maisys handed to new WSL distros is.
+func TestFind(t *testing.T) {
+	rel := newRelease(t, "0.2.0", nil)
+	u := &Updater{ReleaseURL: rel.url, OS: "linux", Arch: "amd64"}
+	got, err := u.Find(t.Context(), "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Archive != "maisys_0.2.0_linux_amd64.tar.gz" {
+		t.Errorf("Find() = %+v, want the linux/amd64 archive", got)
+	}
+	bin, err := u.Binary(t.Context(), got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := binaryFor("0.2.0", "linux_amd64"); string(bin) != want {
+		t.Errorf("Binary() = %q, want %q", bin, want)
+	}
+
+	_, err = u.Find(t.Context(), "0.3.0")
+	assertErrorContains(t, err, "the release has no archive of maisys 0.3.0 for linux/amd64")
+
+	data, err := u.Fetch(t.Context(), got.Archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Unpack(append(data, 0), got)
+	assertErrorContains(t, err, "checksum mismatch for maisys_0.2.0_linux_amd64.tar.gz")
+}
+
 func TestUpdateInstallsNewerRelease(t *testing.T) {
 	rel := newRelease(t, "0.2.0", nil)
 	u := newUpdater(t, rel.url, "0.1.0")

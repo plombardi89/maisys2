@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -23,6 +24,9 @@ type ApplyInput struct {
 	Abort context.Context
 	// Progress, if set, receives a line for each step as it starts.
 	Progress io.Writer
+	// Out, if set, is the terminal, which steps show things on as they
+	// run (see resource.Runtime.Out). It's never the log.
+	Out io.Writer
 }
 
 // Result is what applying a plan did.
@@ -88,10 +92,12 @@ type RemovalResult struct {
 // The state file is saved after every step. A step that fails makes its
 // module fail: the module's other changes and every module that depends on
 // it, directly or not, are skipped, as are the removals of their records,
-// and everything else carries on. Modules that failed in the plan count as
-// failed too. A step that needs a reboot (see resource.RebootNeeder) stops
-// its module in the same way, but without failing: what it stops waits for
-// the next sync, after the reboot.
+// and everything else carries on. A resource.Independent resource that
+// fails makes its module fail too, but the module's other changes are
+// still applied. Modules that failed in the plan count as failed too. A
+// step that needs a reboot (see resource.RebootNeeder) stops its module in
+// the same way, but without failing: what it stops waits for the next
+// sync, after the reboot.
 //
 // Changes of resources in a group (resource.Grouped), such as package
 // installs, are applied in one step, with one call to ApplyGroup, when the
@@ -119,6 +125,7 @@ func Apply(ctx context.Context, p *Plan, in ApplyInput) *Result {
 	}
 
 	in.Store.Machine = p.Machine
+	p.rt.Out = in.Out
 	if !a.done() && p.NeedsPrivileges() {
 		if sudo, ok := p.rt.Runner.(system.SudoRunner); ok {
 			if a.sudoErr = sudo.StartSudo(a.step); a.sudoErr == nil {
@@ -245,7 +252,17 @@ func (a *applier) module(i int, mr *ModuleResult) {
 			if a.res.Err != nil {
 				return
 			}
-			mr.Err = fmt.Errorf("%s: %w", item.summary(), err)
+			err = fmt.Errorf("%s: %w", item.summary(), err)
+			if mr.Err == nil {
+				mr.Err = err
+			} else {
+				mr.Err = errors.Join(mr.Err, err)
+			}
+			if resource.IsIndependent(item.Resource) {
+				// The module fails, but its other changes are applied.
+				a.stopped[m.Name] = m.Name
+				continue
+			}
 			a.stop(m, k, mr)
 			return
 		}

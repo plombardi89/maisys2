@@ -782,6 +782,39 @@ distros.a = { image = "FedoraLinux-44", machine = "arm", user = "phil" }
 			want: []string{`machines/box.toml:5:51: wsl_host.distros.a.machine is "arm", which sets arch = "arm64", but distros on a Windows host are amd64`},
 		},
 		{
+			name: "wsl_host: .wslconfig",
+			machine: `
+os = "windows"
+
+[wsl_host]
+enabled = true
+wslconfig = { memory = "16GB", processors = 4, swap = "0", networking_mode = "mirrored", auto_memory_reclaim = "dropcache", dns_tunneling = true }
+`,
+		},
+		{
+			name: "wsl_host: .wslconfig values WSL doesn't take",
+			machine: `
+os = "windows"
+
+[wsl_host]
+enabled = true
+
+[wsl_host.wslconfig]
+memory = "16"
+processors = 0
+swap = "lots"
+networking_mode = "bridged"
+auto_memory_reclaim = "dropCache"
+`,
+			want: []string{
+				`machines/box.toml:7:10: wsl_host.wslconfig.memory must be a size such as "16GB" or "512MB", not "16"`,
+				`machines/box.toml:9:8: wsl_host.wslconfig.swap must be a size such as "8GB", or "0" for no swap file, not "lots"`,
+				`machines/box.toml:8:14: wsl_host.wslconfig.processors must be at least 1, not 0`,
+				`machines/box.toml:10:19: wsl_host.wslconfig.networking_mode must be "nat" or "mirrored", not "bridged"`,
+				`machines/box.toml:11:23: wsl_host.wslconfig.auto_memory_reclaim must be "disabled", "gradual" or "dropcache", not "dropCache"`,
+			},
+		},
+		{
 			name: "wsl_host and files both write ~/.wslconfig",
 			machine: `
 os = "windows"
