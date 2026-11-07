@@ -8,6 +8,11 @@
 package shells
 
 import (
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/resource"
 )
@@ -52,4 +57,42 @@ type Contributor interface {
 	// ShellEnv returns what the module adds for cfg, its merged config, on
 	// the sync's live system.
 	ShellEnv(cfg config.ModuleConfig, rt *resource.Runtime) (Env, error)
+}
+
+// Merge returns the environments of envs together, in order: their PATH
+// folders, each once, then their variables and their init steps.
+func Merge(envs ...Env) Env {
+	var merged Env
+	for _, env := range envs {
+		for _, dir := range env.Path {
+			if !slices.Contains(merged.Path, dir) {
+				merged.Path = append(merged.Path, dir)
+			}
+		}
+		merged.Variables = append(merged.Variables, env.Variables...)
+		merged.Init = append(merged.Init, env.Init...)
+	}
+	return merged
+}
+
+// Check checks that the shells can write env: that its folders and its
+// variables' names are valid, and that every init step has a name.
+func (e Env) Check() error {
+	var errs []error
+	for _, dir := range e.Path {
+		if dir == "" || strings.ContainsAny(dir, ":\n") {
+			errs = append(errs, fmt.Errorf("%q can't be added to PATH", dir))
+		}
+	}
+	for _, v := range e.Variables {
+		if !ValidName(v.Name) {
+			errs = append(errs, fmt.Errorf("%q isn't a valid variable name", v.Name))
+		}
+	}
+	for _, step := range e.Init {
+		if strings.TrimSpace(step.Name) == "" {
+			errs = append(errs, errors.New("an init step has no name"))
+		}
+	}
+	return errors.Join(errs...)
 }

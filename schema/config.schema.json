@@ -143,19 +143,19 @@
           "type": "object",
           "properties": {
             "enabled": {
-              "description": "`enabled` installs the shell and writes its environment file.",
+              "description": "`enabled` installs the shell and writes its environment file: PATH, variables and init steps of the modules the machine enables, with ~/.local/bin first on PATH.",
               "type": "boolean",
               "default": false
             },
             "variables": {
-              "description": "`variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh.",
+              "description": "`variables` are exported before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. A value can start with ~/ for your home folder and refer to other variables as $NAME; everything else is taken literally.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
               }
             },
             "pre_snippets": {
-              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. They're copied to ~/.config/maisys/shell/<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -163,7 +163,7 @@
               "default": []
             },
             "snippets": {
-              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. They're copied to ~/.config/maisys/shell/<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -171,7 +171,7 @@
               "default": []
             },
             "manage_rc": {
-              "description": "`manage_rc` lets maisys write ~/.bashrc. Set it to false to keep your own, and source ~/.config/maisys/shell/env.sh from it.",
+              "description": "`manage_rc` lets maisys write ~/.bashrc, which then sources ~/secrets.sh last if it exists. Set it to false to keep your own, and source ~/.config/maisys/shell/env.sh from it: that file then sets the variables and sources the snippets too.",
               "type": "boolean",
               "default": true
             }
@@ -183,19 +183,19 @@
           "type": "object",
           "properties": {
             "enabled": {
-              "description": "`enabled` installs the shell and writes its environment file.",
+              "description": "`enabled` installs the shell and writes its environment file: PATH, variables and init steps of the modules the machine enables, with ~/.local/bin first on PATH.",
               "type": "boolean",
               "default": false
             },
             "variables": {
-              "description": "`variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh.",
+              "description": "`variables` are exported before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. A value can start with ~/ for your home folder and refer to other variables as $NAME; everything else is taken literally.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
               }
             },
             "pre_snippets": {
-              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. They're copied to ~/.config/maisys/shell/<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -203,7 +203,7 @@
               "default": []
             },
             "snippets": {
-              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. They're copied to ~/.config/maisys/shell/<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -211,7 +211,7 @@
               "default": []
             },
             "manage_rc": {
-              "description": "`manage_rc` lets maisys write ~/.zshrc. Set it to false to keep your own, and source ~/.config/maisys/shell/env.zsh from it.",
+              "description": "`manage_rc` lets maisys write ~/.zshrc, which then sources ~/secrets.sh last if it exists. Set it to false to keep your own, and source ~/.config/maisys/shell/env.zsh from it: that file then sets the variables, sources the snippets and loads oh-my-zsh too.",
               "type": "boolean",
               "default": true
             },
@@ -220,7 +220,7 @@
               "type": "object",
               "properties": {
                 "enabled": {
-                  "description": "`enabled` installs oh-my-zsh, with its own updater turned off, and loads it from ~/.zshrc.",
+                  "description": "`enabled` installs oh-my-zsh in ~/.oh-my-zsh, with its own updater turned off, and loads it from ~/.zshrc. Custom themes and plugins go in its custom folder.",
                   "type": "boolean",
                   "default": false
                 },
@@ -230,12 +230,12 @@
                   "default": "master"
                 },
                 "theme": {
-                  "description": "`theme` is the theme to use: one oh-my-zsh includes, or one from custom_themes.",
+                  "description": "`theme` is the theme to use: one oh-my-zsh includes, or one from custom_themes. Themes oh-my-zsh includes are checked once it's checked out.",
                   "type": "string",
                   "default": "robbyrussell"
                 },
                 "plugins": {
-                  "description": "`plugins` lists the plugins to load: ones oh-my-zsh includes, or ones from custom_plugins. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+                  "description": "`plugins` lists the plugins to load: ones oh-my-zsh includes, or ones from custom_plugins. Plugins oh-my-zsh includes are checked once it's checked out. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
                   "type": "array",
                   "items": {
                     "type": "string"
@@ -259,7 +259,7 @@
                         "default": ""
                       },
                       "file": {
-                        "description": "`file` is the theme file in the repo, such as \"aphrodite.zsh-theme\".",
+                        "description": "`file` is the theme file in the repo, such as \"aphrodite.zsh-theme\". The theme's <name>.zsh-theme links to it.",
                         "type": "string",
                         "default": ""
                       }
@@ -294,23 +294,23 @@
           "additionalProperties": false
         },
         "fish": {
-          "description": "`fish` configures fish, which loads maisys's environment from ~/.config/fish/conf.d, so its config.fish is never changed.",
+          "description": "`fish` configures fish. maisys writes fish's variables, snippets and environment to ~/.config/fish/conf.d/maisys.fish, which fish loads by itself, so its config.fish is never changed.",
           "type": "object",
           "properties": {
             "enabled": {
-              "description": "`enabled` installs the shell and writes its environment file.",
+              "description": "`enabled` installs the shell and writes its environment file: PATH, variables and init steps of the modules the machine enables, with ~/.local/bin first on PATH.",
               "type": "boolean",
               "default": false
             },
             "variables": {
-              "description": "`variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh.",
+              "description": "`variables` are exported before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. A value can start with ~/ for your home folder and refer to other variables as $NAME; everything else is taken literally.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
               }
             },
             "pre_snippets": {
-              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. They're copied to ~/.config/maisys/shell/<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -318,7 +318,7 @@
               "default": []
             },
             "snippets": {
-              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. They're copied to ~/.config/maisys/shell/<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
               "type": "array",
               "items": {
                 "type": "string"

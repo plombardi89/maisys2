@@ -104,34 +104,34 @@ Works on Fedora and Ubuntu.
 | `shell.enabled` | boolean | `false` | `enabled` turns the module on. |
 | `shell.login` | string | `""` | `login` is the login shell: "bash", "zsh" or "fish", which must be enabled. Without it, the login shell isn't changed. |
 | `shell.bash` | table |  | `bash` configures bash. |
-| `shell.bash.enabled` | boolean | `false` | `enabled` installs the shell and writes its environment file. |
-| `shell.bash.variables` | table of strings |  | `variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. |
-| `shell.bash.pre_snippets` | list of strings | `[]` | `pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
-| `shell.bash.snippets` | list of strings | `[]` | `snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
-| `shell.bash.manage_rc` | boolean | `true` | `manage_rc` lets maisys write \~/.bashrc. Set it to false to keep your own, and source \~/.config/maisys/shell/env.sh from it. |
+| `shell.bash.enabled` | boolean | `false` | `enabled` installs the shell and writes its environment file: PATH, variables and init steps of the modules the machine enables, with \~/.local/bin first on PATH. |
+| `shell.bash.variables` | table of strings |  | `variables` are exported before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. A value can start with \~/ for your home folder and refer to other variables as $NAME; everything else is taken literally. |
+| `shell.bash.pre_snippets` | list of strings | `[]` | `pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. They're copied to \~/.config/maisys/shell/\<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.bash.snippets` | list of strings | `[]` | `snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. They're copied to \~/.config/maisys/shell/\<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.bash.manage_rc` | boolean | `true` | `manage_rc` lets maisys write \~/.bashrc, which then sources \~/secrets.sh last if it exists. Set it to false to keep your own, and source \~/.config/maisys/shell/env.sh from it: that file then sets the variables and sources the snippets too. |
 | `shell.zsh` | table |  | `zsh` configures zsh. |
-| `shell.zsh.enabled` | boolean | `false` | `enabled` installs the shell and writes its environment file. |
-| `shell.zsh.variables` | table of strings |  | `variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. |
-| `shell.zsh.pre_snippets` | list of strings | `[]` | `pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
-| `shell.zsh.snippets` | list of strings | `[]` | `snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
-| `shell.zsh.manage_rc` | boolean | `true` | `manage_rc` lets maisys write \~/.zshrc. Set it to false to keep your own, and source \~/.config/maisys/shell/env.zsh from it. |
+| `shell.zsh.enabled` | boolean | `false` | `enabled` installs the shell and writes its environment file: PATH, variables and init steps of the modules the machine enables, with \~/.local/bin first on PATH. |
+| `shell.zsh.variables` | table of strings |  | `variables` are exported before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. A value can start with \~/ for your home folder and refer to other variables as $NAME; everything else is taken literally. |
+| `shell.zsh.pre_snippets` | list of strings | `[]` | `pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. They're copied to \~/.config/maisys/shell/\<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.zsh.snippets` | list of strings | `[]` | `snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. They're copied to \~/.config/maisys/shell/\<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.zsh.manage_rc` | boolean | `true` | `manage_rc` lets maisys write \~/.zshrc, which then sources \~/secrets.sh last if it exists. Set it to false to keep your own, and source \~/.config/maisys/shell/env.zsh from it: that file then sets the variables, sources the snippets and loads oh-my-zsh too. |
 | `shell.zsh.oh_my_zsh` | table |  | `oh_my_zsh` configures oh-my-zsh. |
-| `shell.zsh.oh_my_zsh.enabled` | boolean | `false` | `enabled` installs oh-my-zsh, with its own updater turned off, and loads it from \~/.zshrc. |
+| `shell.zsh.oh_my_zsh.enabled` | boolean | `false` | `enabled` installs oh-my-zsh in \~/.oh-my-zsh, with its own updater turned off, and loads it from \~/.zshrc. Custom themes and plugins go in its custom folder. |
 | `shell.zsh.oh_my_zsh.ref` | string | `"master"` | `ref` is the oh-my-zsh branch, tag or commit to check out. A branch is updated on every sync. |
-| `shell.zsh.oh_my_zsh.theme` | string | `"robbyrussell"` | `theme` is the theme to use: one oh-my-zsh includes, or one from custom_themes. |
-| `shell.zsh.oh_my_zsh.plugins` | list of strings | `[]` | `plugins` lists the plugins to load: ones oh-my-zsh includes, or ones from custom_plugins. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.zsh.oh_my_zsh.theme` | string | `"robbyrussell"` | `theme` is the theme to use: one oh-my-zsh includes, or one from custom_themes. Themes oh-my-zsh includes are checked once it's checked out. |
+| `shell.zsh.oh_my_zsh.plugins` | list of strings | `[]` | `plugins` lists the plugins to load: ones oh-my-zsh includes, or ones from custom_plugins. Plugins oh-my-zsh includes are checked once it's checked out. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
 | `shell.zsh.oh_my_zsh.custom_themes` | table of tables |  | `custom_themes` are themes from other git repos, by theme name. |
 | `shell.zsh.oh_my_zsh.custom_themes.<name>.repo` | string | `""` | `repo` is the URL of the git repo. |
 | `shell.zsh.oh_my_zsh.custom_themes.<name>.ref` | string | `""` | `ref` is the branch, tag or commit to check out. A branch is updated on every sync. |
-| `shell.zsh.oh_my_zsh.custom_themes.<name>.file` | string | `""` | `file` is the theme file in the repo, such as "aphrodite.zsh-theme". |
+| `shell.zsh.oh_my_zsh.custom_themes.<name>.file` | string | `""` | `file` is the theme file in the repo, such as "aphrodite.zsh-theme". The theme's \<name>.zsh-theme links to it. |
 | `shell.zsh.oh_my_zsh.custom_plugins` | table of tables |  | `custom_plugins` are plugins from other git repos, by plugin name. |
 | `shell.zsh.oh_my_zsh.custom_plugins.<name>.repo` | string | `""` | `repo` is the URL of the git repo. |
 | `shell.zsh.oh_my_zsh.custom_plugins.<name>.ref` | string | `""` | `ref` is the branch, tag or commit to check out. A branch is updated on every sync. |
-| `shell.fish` | table |  | `fish` configures fish, which loads maisys's environment from \~/.config/fish/conf.d, so its config.fish is never changed. |
-| `shell.fish.enabled` | boolean | `false` | `enabled` installs the shell and writes its environment file. |
-| `shell.fish.variables` | table of strings |  | `variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. |
-| `shell.fish.pre_snippets` | list of strings | `[]` | `pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
-| `shell.fish.snippets` | list of strings | `[]` | `snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.fish` | table |  | `fish` configures fish. maisys writes fish's variables, snippets and environment to \~/.config/fish/conf.d/maisys.fish, which fish loads by itself, so its config.fish is never changed. |
+| `shell.fish.enabled` | boolean | `false` | `enabled` installs the shell and writes its environment file: PATH, variables and init steps of the modules the machine enables, with \~/.local/bin first on PATH. |
+| `shell.fish.variables` | table of strings |  | `variables` are exported before anything else is loaded, so they can configure what comes after, such as oh-my-zsh. A value can start with \~/ for your home folder and refer to other variables as $NAME; everything else is taken literally. |
+| `shell.fish.pre_snippets` | list of strings | `[]` | `pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. They're copied to \~/.config/maisys/shell/\<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
+| `shell.fish.snippets` | list of strings | `[]` | `snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. They're copied to \~/.config/maisys/shell/\<shell>/ and sourced from there. Combined across layers: profiles and the machine file add to the list instead of replacing it. |
 
 ## golang
 

@@ -1,0 +1,22 @@
+# Written by maisys from your config repo, as shell.zsh.manage_rc is on. The
+# next sync backs up and replaces any changes made here: add your own
+# settings to the config repo as snippets instead.
+
+# shell.zsh.variables
+export EDITOR="nvim"
+export HIST_STAMPS="yyyy-mm-dd"
+
+# shell.zsh.pre_snippets
+source "${HOME}/.config/maisys/shell/zsh/first.zsh"
+
+# The environment of the modules your config enables
+source "${HOME}/.config/maisys/shell/env.zsh"
+
+# shell.zsh.snippets
+source "${HOME}/.config/maisys/shell/zsh/aliases.zsh"
+source "${HOME}/.config/maisys/shell/zsh/more aliases.zsh"
+
+# ~/secrets.sh, if there is one
+if [ -f "${HOME}/secrets.sh" ]; then
+	source "${HOME}/secrets.sh"
+fi
