@@ -187,7 +187,8 @@ func TestPolicyMatchesCI(t *testing.T) {
 	if ubuntu = slices.Compact(ubuntu); !slices.Equal(ubuntu, ubuntuLTS) {
 		t.Errorf("ci.yml tests Ubuntu %q, but ubuntuLTS is %q", ubuntu, ubuntuLTS)
 	}
-	if newest := ubuntuLTS[len(ubuntuLTS)-1]; !slices.Equal(ubuntuARM, []string{newest}) {
+	slices.Sort(ubuntuARM)
+	if ubuntuARM, newest := slices.Compact(ubuntuARM), ubuntuLTS[len(ubuntuLTS)-1]; !slices.Equal(ubuntuARM, []string{newest}) {
 		t.Errorf("ci.yml tests Ubuntu %q on arm64, want only the newest LTS release, %s", ubuntuARM, newest)
 	}
 
