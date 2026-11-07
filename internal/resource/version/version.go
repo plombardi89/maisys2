@@ -37,6 +37,9 @@ type LookupError struct {
 	Err error
 }
 
+// StopsSync reports that a failed lookup stops the whole sync.
+func (e *LookupError) StopsSync() bool { return true }
+
 func (e *LookupError) Error() string {
 	// HTTP errors start with the URL, which is often the upstream itself.
 	msg := strings.TrimPrefix(e.Err.Error(), e.Upstream+": ")

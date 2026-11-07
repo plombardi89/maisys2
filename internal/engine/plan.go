@@ -83,6 +83,9 @@ type PlanInput struct {
 	Log io.Writer
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
+	// Shared are values the resources share, made before the plan (see
+	// resource.Runtime.Shared).
+	Shared map[any]any
 }
 
 // Plan is what a sync would change, module by module, and what it would
@@ -183,6 +186,9 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 			Log:      in.Log,
 			Now:      now,
 		},
+	}
+	for key, value := range in.Shared {
+		p.rt.SetShared(key, value)
 	}
 	if f := in.Facts; f != nil {
 		p.OS, p.OSVersion, p.Arch = cmp.Or(f.OS, config.OS(f.OSID)), f.OSVersion, cmp.Or(string(f.Arch), f.RawArch)
@@ -543,6 +549,22 @@ func (p *Plan) NeedsPrivileges() bool {
 		}
 	}
 	return slices.ContainsFunc(p.Removals, func(r *Removal) bool { return r.applies() && r.privileged() })
+}
+
+// StopError returns the first error in the plan that stops the whole sync
+// (see resource.StopsSync), or nil.
+func (p *Plan) StopError() error {
+	for _, m := range p.Modules {
+		if m.Err != nil && resource.StopsSync(m.Err) {
+			return m.Err
+		}
+		for _, item := range m.Items {
+			if item.Err != nil && resource.StopsSync(item.Err) {
+				return item.Err
+			}
+		}
+	}
+	return nil
 }
 
 // Failed reports whether a module failed in the plan, or a removal

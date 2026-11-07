@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/plombardi89/maisys2/internal/state"
@@ -75,4 +76,31 @@ func TestNewRemovers(t *testing.T) {
 		}
 	}()
 	NewRemovers(remover("tool"), remover("tool"))
+}
+
+func TestRuntimeShared(t *testing.T) {
+	type key struct{}
+	rt := &Runtime{}
+	calls := 0
+	create := func() (any, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("not yet")
+		}
+		return calls, nil
+	}
+	if _, err := rt.Shared(key{}, create); err == nil {
+		t.Fatal("Shared() didn't return create's error")
+	}
+	for range 2 {
+		if v, err := rt.Shared(key{}, create); err != nil || v != 2 {
+			t.Errorf("Shared() = %v, %v; want 2, made once after the failure", v, err)
+		}
+	}
+
+	seeded := &Runtime{}
+	seeded.SetShared(key{}, "made before")
+	if v, _ := seeded.Shared(key{}, create); v != "made before" {
+		t.Errorf("Shared() = %v, want the value set before", v)
+	}
 }

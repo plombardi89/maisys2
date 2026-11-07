@@ -24,6 +24,8 @@ import (
 	"github.com/plombardi89/maisys2/internal/resource/version"
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/state"
+
+	"github.com/plombardi89/maisys2/internal/buildinfo"
 )
 
 // Kind is the kind of resource a Tool is.
@@ -117,6 +119,24 @@ func NewEnv(paths settings.Paths, userAgent string) *Env {
 		ToolsDir: ToolsDir(paths.Home),
 		BinDir:   BinDir(paths.Home),
 	}
+}
+
+// EnvKey is the key the Env of a sync is shared under (see
+// resource.Runtime.Shared). The sync makes it, and loads its caches, before
+// it plans.
+type EnvKey struct{}
+
+// EnvFor returns the Env the resources of rt's sync share. If the sync
+// didn't make one, it's made from rt.Paths.
+func EnvFor(rt *resource.Runtime) (*Env, error) {
+	v, err := rt.Shared(EnvKey{}, func() (any, error) {
+		return NewEnv(rt.Paths, "maisys/"+buildinfo.Version()), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	env, _ := v.(*Env)
+	return env, nil
 }
 
 // Load reads the caches, so that one written by a newer maisys stops a sync

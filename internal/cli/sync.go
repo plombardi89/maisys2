@@ -21,6 +21,8 @@ import (
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/state"
 	"github.com/plombardi89/maisys2/internal/system"
+
+	"github.com/plombardi89/maisys2/internal/resource/tool"
 )
 
 // errInterrupted is how a sync stops on Ctrl-C before it changes anything.
@@ -288,6 +290,12 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 		opts.Verbose = errOut
 	}
 	runner := s.g.newRunner(opts)
+	// Reading the caches now means one written by a newer maisys stops the
+	// sync before it plans anything.
+	tools := tool.NewEnv(s.paths, "maisys/"+buildinfo.Version())
+	if err := tools.Load(); err != nil {
+		return err
+	}
 	p, err := engine.NewPlan(ctx, engine.PlanInput{
 		Machine:  s.cfg,
 		Facts:    sys,
@@ -301,6 +309,7 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 		Warnings: s.warnings,
 		Log:      log,
 		Now:      s.g.now,
+		Shared:   map[any]any{tool.EnvKey{}: tools},
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -311,6 +320,12 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 	s.planShown = true
 	p.Render(out, s.g.color && s.g.stdoutTerminal())
 	p.Render(log, false)
+	// Some failures, such as a failed lookup of a "latest" version, stop
+	// the whole sync, even a dry run's exit code.
+	if err := p.StopError(); err != nil {
+		s.printLogPath(log)
+		return err
+	}
 
 	if s.opts.dryRun {
 		switch {
