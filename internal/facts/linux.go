@@ -33,6 +33,7 @@ func DetectLinux(readFile func(name string) ([]byte, error), getenv func(key str
 	s := &System{
 		OSID:       release["ID"],
 		OSVersion:  release["VERSION_ID"],
+		OSCodename: release["VERSION_CODENAME"],
 		PrettyName: release["PRETTY_NAME"],
 		WSLDistro:  getenv("WSL_DISTRO_NAME"),
 	}

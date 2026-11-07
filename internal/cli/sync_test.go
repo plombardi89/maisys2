@@ -31,8 +31,8 @@ const fc44 = "workbox-camwin-fc44"
 const testSystem = "fedora 44, amd64"
 
 // emptyPlan returns the plan for machine on system with nothing to change,
-// as for the example repo's machines, whose modules have no resources yet,
-// with header's lines at the top.
+// as for the example repo's machines when modules have no resources (see
+// configOnly), with header's lines at the top.
 func emptyPlan(machine, system string, header ...string) string {
 	var b strings.Builder
 	b.WriteString("Plan for " + machine + " (" + system + ")\n")

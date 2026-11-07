@@ -100,6 +100,30 @@ tools = ["mvdan.cc/gofumpt@latest", ""]
 `,
 			want: []string{"machines/box.toml:5:37: golang.tools has an empty entry"},
 		},
+		{
+			name: "golang: tools with and without versions",
+			machine: `
+os = "fedora"
+
+[golang]
+enabled = true
+tools = ["mvdan.cc/gofumpt@latest", "golang.org/x/tools/cmd/goimports", "github.com/go-task/task/v3/cmd/task@v3.41.0"]
+`,
+		},
+		{
+			name: "golang: invalid tools",
+			machine: `
+os = "fedora"
+
+[golang]
+enabled = true
+tools = ["mvdan.cc/gofumpt@master", "mvdan.cc/gofumpt latest"]
+`,
+			want: []string{
+				`machines/box.toml:5:10: golang.tools has an invalid entry, "mvdan.cc/gofumpt@master": the version must be "latest" or an exact version such as "v1.2.3", not "master"`,
+				`machines/box.toml:5:37: golang.tools has an invalid entry, "mvdan.cc/gofumpt latest": "mvdan.cc/gofumpt latest" isn't a Go package path, such as "mvdan.cc/gofumpt"`,
+			},
+		},
 
 		// Lists of names
 		{
@@ -430,6 +454,53 @@ fish.snippets = ["shell/fish/nope.fish"]
 `,
 		},
 		{
+			name: "shell: snippets copied to the same file",
+			machine: `
+os = "fedora"
+
+[shell]
+enabled = true
+
+[shell.zsh]
+enabled = true
+pre_snippets = ["shell/zsh/aliases.zsh"]
+snippets = ["shell/zsh/aliases.zsh", "aliases.zsh"]
+`,
+			want: []string{
+				`machines/box.toml:9:38: shell.zsh.snippets lists "aliases.zsh", which doesn't exist in the config repo`,
+				`machines/box.toml:9:38: shell.zsh.snippets lists "aliases.zsh", which would be copied to ~/.config/maisys/shell/zsh/aliases.zsh like "shell/zsh/aliases.zsh": move one of them`,
+			},
+		},
+		{
+			name: "shell: variables and oh-my-zsh names that aren't valid",
+			machine: `
+os = "fedora"
+
+[shell]
+enabled = true
+
+[shell.zsh]
+enabled = true
+variables = { OK_1 = "a", "NOT-OK" = "b", 1X = "c" }
+
+[shell.zsh.oh_my_zsh]
+enabled = true
+theme = "a theme"
+plugins = ["git", "$(id)"]
+custom_themes."../t" = { repo = "https://example.com/t", ref = "main", file = "../t.zsh-theme" }
+custom_plugins."p/q" = { repo = "https://example.com/p", ref = "main" }
+`,
+			want: []string{
+				`machines/box.toml:8:48: shell.zsh.variables.1X isn't a valid variable name: use letters, digits and underscores, not starting with a digit`,
+				`machines/box.toml:8:38: shell.zsh.variables.NOT-OK isn't a valid variable name: use letters, digits and underscores, not starting with a digit`,
+				`machines/box.toml:12:9: shell.zsh.oh_my_zsh.theme "a theme" isn't a valid theme name`,
+				`machines/box.toml:13:19: shell.zsh.oh_my_zsh.plugins lists "$(id)", which isn't a valid plugin name`,
+				`machines/box.toml:14:24: shell.zsh.oh_my_zsh.custom_themes."../t" has a name that isn't a valid theme name: use letters, digits, dots, dashes and underscores`,
+				`machines/box.toml:14:79: shell.zsh.oh_my_zsh.custom_themes."../t".file is "../t.zsh-theme", which isn't a path inside the theme's repo`,
+				`machines/box.toml:15:24: shell.zsh.oh_my_zsh.custom_plugins.p/q has a name that isn't a valid plugin name: use letters, digits, dots, dashes and underscores`,
+			},
+		},
+		{
 			name: "shell and files both write ~/.bashrc",
 			machine: `
 os = "fedora"
@@ -475,6 +546,30 @@ items.fish = { source = "files/nvim/", target = "~/.config/fish/" }
 			want: []string{
 				`machines/box.toml:5:16: shell.fish.enabled (~/.config/fish/conf.d/maisys.fish) is inside files.items.fish.target (~/.config/fish/) on machine "box": only one of them can write it`,
 			},
+		},
+
+		// wsl
+		{
+			name: "wsl: X410 with systemd",
+			machine: `
+os = "fedora"
+
+[wsl]
+enabled = true
+wslg = false
+`,
+		},
+		{
+			name: "wsl: X410 without systemd",
+			machine: `
+os = "ubuntu"
+
+[wsl]
+enabled = true
+wslg = false
+systemd = false
+`,
+			want: []string{"machines/box.toml:5:8: wsl.wslg is false, which sets up the X410 bridge as a systemd service, but wsl.systemd is false: turn systemd on, or wslg back on"},
 		},
 
 		// wsl_host

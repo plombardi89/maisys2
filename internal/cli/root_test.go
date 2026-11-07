@@ -41,8 +41,8 @@ type testEnv struct {
 	now time.Time
 	// abort is closed to act as a second Ctrl-C.
 	abort chan struct{}
-	// modules are the modules maisys has: the built-in ones, unless a
-	// test uses fake ones.
+	// modules are the modules maisys has: the built-in ones without their
+	// resources (see configOnly), unless a test uses fake ones.
 	modules []config.Module
 	// removers remove records of what's taken out of the config.
 	removers resource.Removers
@@ -77,9 +77,25 @@ func newTestEnv(t *testing.T) *testEnv {
 			Hostname:   "nothing-matches",
 		},
 		now:     testNow,
-		modules: modules.All(),
+		modules: configOnly(modules.All()),
 		runner:  systemtest.NewFakeRunner(t),
 	}
+}
+
+// configOnly returns mods without their resources: only their config, so
+// a sync plans nothing for them. The tests of the sync command test it
+// with fake modules, and each module's resources are tested on their own.
+func configOnly(mods []config.Module) []config.Module {
+	out := make([]config.Module, len(mods))
+	for i, mod := range mods {
+		out[i] = configModule{mod}
+	}
+	return out
+}
+
+// configModule is a module's config side, without its resources.
+type configModule struct {
+	config.Module
 }
 
 func (e *testEnv) environment(stdout, stderr *bytes.Buffer) *environment {
