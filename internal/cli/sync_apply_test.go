@@ -821,3 +821,38 @@ func TestDescribeLiveSystem(t *testing.T) {
 		}
 	}
 }
+
+// TestSyncSwitchSavedWhenApplied checks that a switch of machine is part of
+// the plan: it's only saved once the plan is applied.
+func TestSyncSwitchSavedWhenApplied(t *testing.T) {
+	e := newTestEnv(t)
+	alpha := fake("alpha", nil, "fake:a")
+	dir := e.useFakes(alpha)
+	other := boxFiles(alpha)["machines/box.toml"]
+	if err := os.WriteFile(filepath.Join(dir, "machines", "box2.toml"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wantMachine := func(step, want string) {
+		t.Helper()
+		if s := e.loadSettings(); s.Machine != want {
+			t.Errorf("%s: saved machine = %q, want %q", step, s.Machine, want)
+		}
+	}
+
+	if code, _, stderr := e.run("sync", "--local", "--machine", "box2", "--dry-run"); code != exitChanges {
+		t.Fatalf("dry run: exit code = %d, stderr:\n%s", code, stderr)
+	}
+	wantMachine("after a dry run", "box")
+
+	e.terminal, e.stdin = true, "n\n"
+	if code, _, stderr := e.run("sync", "--local", "--machine", "box2"); code != exitOK {
+		t.Fatalf("answering no: exit code = %d, stderr:\n%s", code, stderr)
+	}
+	wantMachine("after answering no", "box")
+
+	e.terminal, e.stdin = false, ""
+	if code, _, stderr := e.run("sync", "--local", "--machine", "box2", "--yes"); code != exitOK {
+		t.Fatalf("applying: exit code = %d, stderr:\n%s", code, stderr)
+	}
+	wantMachine("after applying", "box2")
+}

@@ -108,6 +108,10 @@ type syncRun struct {
 	// planShown reports whether the plan, with header and warnings, has
 	// been shown.
 	planShown bool
+	// pending is the local settings to save, if they change (see
+	// saveSettings), and machineSource where the machine came from.
+	pending       *settings.Settings
+	machineSource string
 }
 
 // run runs the sync. It refuses to run as root, updates maisys, takes the
@@ -146,12 +150,17 @@ func (s *syncRun) run() error {
 	if err := s.checkSystem(sys); err != nil {
 		return err
 	}
+	if s.saved == nil {
+		if err := s.saveSettings(); err != nil {
+			return err
+		}
+	}
 	return s.planAndApply(sys)
 }
 
 // showUnshown prints the plan's header lines and warnings if the sync
 // stopped before it showed the plan, so that a switch of config repo or
-// machine, which is saved already, is still reported.
+// machine is still reported (it's only saved once a plan is applied).
 func (s *syncRun) showUnshown() {
 	if s.planShown {
 		return
@@ -315,6 +324,9 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 		if ok, err := s.confirm(); err != nil || !ok {
 			return err
 		}
+	}
+	if err := s.saveSettings(); err != nil {
+		return err
 	}
 	return s.apply(p, store, log)
 }

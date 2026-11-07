@@ -813,10 +813,12 @@ func TestSyncSwitchMachine(t *testing.T) {
 			stderr:  `maisys: machines/nope.toml doesn't exist in `,
 		},
 		{
+			// The switch is only saved once a plan is applied, so the saved
+			// machine stays the one that works here.
 			name:    "a machine for another system",
 			args:    []string{"sync", "--machine", "phil-workp14s"},
 			code:    exitError,
-			machine: "phil-workp14s",
+			machine: fc44,
 			stdout:  "maisys: machine: phil-workp14s (was " + fc44 + ")\n",
 			stderr: "machines/phil-workp14s.toml:1:6: machine \"phil-workp14s\" is for Ubuntu 26.04, but it's running on Fedora 44\n" +
 				"maisys: 1 problem found\n",
