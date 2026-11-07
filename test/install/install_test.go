@@ -1,6 +1,8 @@
-// Package install tests install.sh. Each test pipes the script into bash, the
-// way "curl ... | bash -s --" does, against a fake release served over HTTP,
-// with HOME pointing at a temporary directory.
+// Package install tests install.sh and install.ps1. Each install.sh test
+// pipes the script into bash, the way "curl ... | bash -s --" does, against
+// a fake release served over HTTP, with HOME pointing at a temporary
+// directory. The install.ps1 tests, which only run on Windows, are in
+// install_ps1_windows_test.go.
 package install_test
 
 import (
