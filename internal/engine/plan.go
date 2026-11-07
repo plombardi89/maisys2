@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"slices"
 	"strings"
 	"sync"
@@ -84,6 +85,8 @@ type PlanInput struct {
 	Log io.Writer
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
+	// RepoFS is the config repo's files.
+	RepoFS fs.FS
 	// Shared are values the resources share, made before the plan (see
 	// resource.Runtime.Shared).
 	Shared map[any]any
@@ -201,6 +204,8 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 			Facts:    in.Facts,
 			Paths:    in.Paths,
 			Machine:  in.Machine,
+			Modules:  in.Modules,
+			RepoFS:   in.RepoFS,
 			Previous: st.Get,
 			Log:      in.Log,
 			Now:      now,
