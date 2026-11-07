@@ -42,6 +42,14 @@ type Cmd struct {
 	// AllowExit lists the exit codes other than 0 that aren't errors, such
 	// as 1 for "rpm -q" of a package that isn't installed.
 	AllowExit []int
+	// Interactive runs the command where the terminal's Ctrl-C reaches it,
+	// as it reaches maisys. Only a command that may ask you something
+	// needs it, such as sudo -v asking for your password. Other commands
+	// run in a process group of their own (on Windows, without Ctrl-C), so
+	// that after a Ctrl-C the step in progress can finish: maisys stops
+	// them itself when their context is cancelled. They mustn't read from
+	// the terminal.
+	Interactive bool
 }
 
 // String returns the command line, quoted for a POSIX shell where needed.
@@ -226,6 +234,7 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	cmd.Dir = c.Dir
 	cmd.Env = append(append(os.Environ(), "LC_ALL=C"), c.Env...)
 	cmd.Stdin = c.Stdin
+	cmd.SysProcAttr = procAttr(c.Interactive)
 	cmd.Cancel = func() error { return interrupt(cmd.Process) }
 	cmd.WaitDelay = 10 * time.Second
 
@@ -250,7 +259,10 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	}
 
 	start := time.Now()
-	err := cmd.Run()
+	err := checkDir(c.Dir)
+	if err == nil {
+		err = cmd.Run()
+	}
 	for _, s := range streams {
 		s.flush()
 	}
@@ -279,6 +291,21 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	}
 	r.logCommand(start, line, combined.Bytes(), outcome)
 	return res, err
+}
+
+// checkDir returns an error with Op "chdir" if dir isn't empty and can't be
+// found. os.StartProcess checks this itself only for commands started
+// without a SysProcAttr; for the others, a missing working directory would
+// look like a missing command.
+func checkDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	_, err := os.Stat(dir)
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		pe.Op = "chdir"
+	}
+	return err
 }
 
 // logCommand writes one command to the log in a single write, so commands

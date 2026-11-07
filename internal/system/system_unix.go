@@ -15,3 +15,14 @@ const sudoSupported = true
 func interrupt(p *os.Process) error {
 	return p.Signal(syscall.SIGTERM)
 }
+
+// procAttr returns how to start a command. One that isn't interactive gets
+// a process group of its own, so the SIGINT a terminal sends maisys's
+// process group on Ctrl-C doesn't reach it. It stays in maisys's session,
+// with the same terminal, which sudo's cached password depends on.
+func procAttr(interactive bool) *syscall.SysProcAttr {
+	if interactive {
+		return nil
+	}
+	return &syscall.SysProcAttr{Setpgid: true}
+}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -244,6 +245,42 @@ func TestStartSudo(t *testing.T) {
 	}
 	if n := sudo.count(t, "-n", "true"); n != checks+1 {
 		t.Errorf("sudo was checked %d times after StopSudo, want once", n-checks)
+	}
+}
+
+// TestSudoInForeground checks that sudo -v, which may ask for a password,
+// runs where the terminal's Ctrl-C reaches it, and that commands run as
+// root and the session's refreshes don't.
+func TestSudoInForeground(t *testing.T) {
+	sudo := useFakeSudo(t, "password")
+	groups := filepath.Join(t.TempDir(), "groups")
+	t.Setenv("FAKE_SUDO_GROUPS", groups)
+	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader("secret\n"), Refresh: 10 * time.Millisecond}})
+	t.Cleanup(r.StopSudo)
+
+	if err := r.StartSudo(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return sudo.count(t, "-n", "-v") >= 1 })
+	r.StopSudo()
+
+	data, err := os.ReadFile(groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"-v": "parent", "-n -- env LC_ALL=C true": "own", "-n -v": "own"}
+	for line := range strings.Lines(string(data)) {
+		args, group, _ := strings.Cut(strings.TrimSpace(line), ": ")
+		if w, ok := want[args]; ok && group != w {
+			t.Errorf("sudo %s ran in process group %q, want %q", args, group, w)
+		}
+		delete(want, args)
+	}
+	if len(want) > 0 {
+		t.Errorf("sudo didn't run with %q:\n%s", slices.Sorted(maps.Keys(want)), data)
 	}
 }
 
