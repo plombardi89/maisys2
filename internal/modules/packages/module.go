@@ -27,3 +27,10 @@ type Config struct {
 	// names the machine's OS uses for them.
 	Install []string `toml:"install" merge:"union"`
 }
+
+var _ config.Checker = (*Config)(nil)
+
+// Check checks that install has no empty entries.
+func (c *Config) Check(check *config.Check) {
+	check.NoEmptyItems("install", c.Install)
+}
