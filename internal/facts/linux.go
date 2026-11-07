@@ -24,7 +24,7 @@ const kernelReleasePath = "/proc/sys/kernel/osrelease"
 
 // DetectLinux detects the Linux distribution and whether it's running in
 // WSL, reading files with readFile and environment variables with getenv.
-// It leaves Arch, RawArch and Hostname empty; Detect fills them in.
+// It leaves Arch, RawArch, Hostname and Root empty; Detect fills them in.
 func DetectLinux(readFile func(name string) ([]byte, error), getenv func(key string) string) (*System, error) {
 	release, err := readOSRelease(readFile)
 	if err != nil {

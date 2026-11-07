@@ -315,10 +315,10 @@ func (v *validator) modules() {
 			continue
 		}
 		if validOS(m.OS) && !slices.Contains(info.OS, m.OS) {
-			v.errorf(v.enabledAt(name), "%s only works on %s, but machine %q is %s", name, either(info.OS), m.Name, m.OS)
+			v.errorf(m.EnabledAt(name), "%s only works on %s, but machine %q is %s", name, either(info.OS), m.Name, m.OS)
 		}
 		if m.OS != Windows && slices.Contains(AllArch(), m.Arch) && len(info.Arch) > 0 && !slices.Contains(info.Arch, m.Arch) {
-			v.errorf(v.enabledAt(name), "%s only works on %s, but machine %q is %s", name, either(info.Arch), m.Name, m.Arch)
+			v.errorf(m.EnabledAt(name), "%s only works on %s, but machine %q is %s", name, either(info.Arch), m.Name, m.Arch)
 		}
 		if version, ok := versionOf(cfg); ok && version != Latest && !IsExactVersion(version) {
 			key := JoinKey(name, "version")
@@ -332,10 +332,11 @@ func (v *validator) modules() {
 	}
 }
 
-// enabledAt returns where a module was turned on: where its enabled key was
-// set, or else the first key set in its table.
-func (v *validator) enabledAt(name string) string {
-	m := v.m
+// EnabledAt returns where a module was turned on, as "file:line:column":
+// where its enabled key was set, or else the first key set in its table
+// (sudo has no enabled key). If no file sets any of its keys, it returns
+// where its table is, or else the machine file.
+func (m *Machine) EnabledAt(name string) string {
 	if at := m.Where(JoinKey(name, "enabled")); at != "" {
 		return at
 	}

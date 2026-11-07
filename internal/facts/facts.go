@@ -1,6 +1,7 @@
 // Package facts detects details of the system maisys is running on: the
-// operating system and its version, the CPU architecture, the hostname, and
-// whether it's a WSL distro.
+// operating system and its version, the CPU architecture, the hostname,
+// whether it's a WSL distro, and whether maisys runs as root. It also holds
+// the rolling support policy, and checks a machine against the live system.
 package facts
 
 import (
@@ -37,6 +38,9 @@ type System struct {
 	WSL bool
 	// WSLDistro is the WSL distro's name, if WSL_DISTRO_NAME is set.
 	WSLDistro string
+	// Root reports whether maisys is running as root (effective user ID
+	// 0). It's always false on Windows.
+	Root bool
 }
 
 // Detect detects the system maisys is running on.
@@ -47,6 +51,8 @@ func Detect() (*System, error) {
 	}
 	s.RawArch = runtime.GOARCH
 	s.Arch = archOf(runtime.GOARCH)
+	// os.Geteuid returns -1 on Windows.
+	s.Root = os.Geteuid() == 0
 	if s.Hostname, err = os.Hostname(); err != nil {
 		return nil, fmt.Errorf("finding the hostname: %w", err)
 	}
@@ -68,7 +74,7 @@ func archOf(goarch string) config.Arch {
 // reports version 10.0, so the build number is what tells them apart.
 func windowsName(build uint32) string {
 	name := "Windows 10"
-	if build >= 22000 {
+	if build >= windows11Build {
 		name = "Windows 11"
 	}
 	return fmt.Sprintf("%s (build %d)", name, build)
