@@ -18,12 +18,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-	"weak"
 
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/facts"
@@ -147,38 +145,29 @@ func NewManager(r system.Runner, f *facts.System) (*Manager, error) {
 	return m, nil
 }
 
-// managers holds the Manager of each sync's Runtime, until the Runtime is
-// gone.
-var managers = struct {
-	sync.Mutex
-	m map[weak.Pointer[resource.Runtime]]*Manager
-}{m: map[weak.Pointer[resource.Runtime]]*Manager{}}
-
 // ManagerFor returns the Manager the resources of rt's sync share, which
 // tells the user what it's waiting for through rt.Log.
 func ManagerFor(rt *resource.Runtime) (*Manager, error) {
-	key := weak.Make(rt)
-	managers.Lock()
-	defer managers.Unlock()
-	if m, ok := managers.m[key]; ok {
+	v, err := rt.Shared(managerKey{}, func() (any, error) {
+		m, err := NewManager(rt.Runner, rt.Facts)
+		if err != nil {
+			return nil, err
+		}
+		m.Notify = rt.Log
+		if rt.Now != nil {
+			m.now = rt.Now
+		}
 		return m, nil
-	}
-	m, err := NewManager(rt.Runner, rt.Facts)
+	})
 	if err != nil {
 		return nil, err
 	}
-	m.Notify = rt.Log
-	if rt.Now != nil {
-		m.now = rt.Now
-	}
-	managers.m[key] = m
-	runtime.AddCleanup(rt, func(key weak.Pointer[resource.Runtime]) {
-		managers.Lock()
-		defer managers.Unlock()
-		delete(managers.m, key)
-	}, key)
+	m, _ := v.(*Manager)
 	return m, nil
 }
+
+// managerKey is the key of the shared Manager.
+type managerKey struct{}
 
 // String names the package manager, "apt" or "dnf".
 func (m *Manager) String() string {

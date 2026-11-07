@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/plombardi89/maisys2/internal/resource/download"
+
+	"github.com/plombardi89/maisys2/internal/resource"
 )
 
 // server is a test HTTP server answering each path (with its query, if any)
@@ -317,5 +320,12 @@ func TestCacheFiles(t *testing.T) {
 				t.Errorf("fresh() = %q, %t, %v, want cached %t", v, ok, err, tt.cached)
 			}
 		})
+	}
+}
+
+func TestLookupErrorStopsTheSync(t *testing.T) {
+	err := fmt.Errorf("checking kubectl: %w", &LookupError{Tool: "kubectl", Upstream: "dl.k8s.io", Err: errors.New("timeout")})
+	if !resource.StopsSync(err) {
+		t.Error("a failed lookup doesn't stop the sync, but issue #1 says it does")
 	}
 }

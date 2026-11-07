@@ -64,6 +64,8 @@ type fakeResource struct {
 	kind       string
 	privileged bool
 	applyErr   error
+	// checkErr, if set, makes the resource's check fail.
+	checkErr error
 	// onApply, if set, runs first when the resource is applied, with the
 	// step's context. An error it returns makes the step fail.
 	onApply func(ctx context.Context) error
@@ -79,6 +81,9 @@ func (r *fakeResource) Privileged() bool  { return r.privileged }
 
 func (r *fakeResource) Check(context.Context, *resource.Runtime) (resource.Change, error) {
 	r.checks.Add(1)
+	if r.checkErr != nil {
+		return resource.Change{}, r.checkErr
+	}
 	if r.applied.Load() {
 		return resource.Change{}, nil
 	}
@@ -898,6 +903,33 @@ func TestSyncRebootNotice(t *testing.T) {
 			asked := slices.Contains(e.runner.Commands(), "dnf needs-restarting -r")
 			if asked != (tt.kind == pkg.Kind) {
 				t.Errorf("asked dnf needs-restarting: %t, want %t: only after package changes", asked, tt.kind == pkg.Kind)
+			}
+		})
+	}
+}
+
+// lookupError is a check error that stops the whole sync, like a failed
+// lookup of a "latest" version.
+type lookupError struct{}
+
+func (lookupError) Error() string   { return "can't find the latest version of beta's tool" }
+func (lookupError) StopsSync() bool { return true }
+
+func TestSyncStoppedByAFailedLookup(t *testing.T) {
+	for _, args := range [][]string{{"--dry-run"}, {"--yes"}} {
+		t.Run(args[0], func(t *testing.T) {
+			e := newTestEnv(t)
+			alpha := fake("alpha", nil, "fake:a")
+			beta := fake("beta", nil, "fake:b")
+			beta.resources[0].checkErr = lookupError{}
+			e.useFakes(alpha, beta)
+
+			code, _, stderr := e.run(append([]string{"sync", "--local"}, args...)...)
+			if code != exitError || !strings.Contains(stderr, "maisys: can't find the latest version of beta's tool\n") {
+				t.Errorf("exit code = %d, stderr:\n%s\nwant %d and the lookup error", code, stderr, exitError)
+			}
+			if alpha.resources[0].applied.Load() {
+				t.Error("alpha was applied, though a failed lookup stops the whole sync")
 			}
 		})
 	}
