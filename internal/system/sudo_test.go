@@ -221,9 +221,11 @@ func TestStartSudo(t *testing.T) {
 	if err != nil || string(res.Stdout) != "as root\n" {
 		t.Fatalf("Run() as root in the session = %q, %v", res.Stdout, err)
 	}
-	calls := sudo.calls(t)
-	if last, want := calls[len(calls)-1], []string{"-n", "--", "env", "LC_ALL=C", "echo", "as root"}; !slices.Equal(last, want) {
-		t.Errorf("sudo ran with %q, want %q", last, want)
+	// The refresh goroutine may run sudo -n -v at any time, so look for the
+	// command among the calls rather than expecting it last.
+	want := []string{"-n", "--", "env", "LC_ALL=C", "echo", "as root"}
+	if calls := sudo.calls(t); !slices.ContainsFunc(calls, func(c []string) bool { return slices.Equal(c, want) }) {
+		t.Errorf("sudo calls = %q, want one with %q", calls, want)
 	}
 
 	eventually(t, func() bool { return sudo.count(t, "-n", "-v") >= 2 })
