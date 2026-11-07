@@ -319,15 +319,63 @@ func TestCheckArchitectures(t *testing.T) {
 
 // TestCheckWithoutLists checks a fresh Ubuntu, which has never downloaded
 // its package lists: names can't be checked during the plan.
+// TestCheckWithoutLists checks a fresh Ubuntu whose package lists were
+// never downloaded, where sudo needs a password: the plan can't refresh
+// them, so names are checked once they're refreshed, before installing.
 func TestCheckWithoutLists(t *testing.T) {
 	s := newTestSystem(t, config.Ubuntu)
+	s.runner.SudoStatus = system.SudoNeedsPassword
 	s.on("dpkg-query -W", result(1, "", "dpkg-query: no packages found matching jq\n"))
 
 	rs := Set(s.rt, "packages", []string{"jq"})
 	changes, errs := s.check(rs)
 	wantResults(t, rs, changes, errs, []resource.Change{{Action: resource.Create, Summary: "install jq"}}, []string{""})
-	if got := s.commands(); len(got) != 1 {
-		t.Errorf("commands = %q, want only dpkg-query", got)
+	if got := s.runner.RootCommands(); len(got) != 0 {
+		t.Errorf("ran %q as root during the plan, though sudo needs a password", got)
+	}
+}
+
+// TestCheckStaleLists checks package lists more than an hour old, such as
+// a WSL image's: names they don't have aren't typos until the lists are
+// refreshed. The plan refreshes them if sudo works without a password,
+// and otherwise leaves the names to be checked before installing.
+func TestCheckStaleLists(t *testing.T) {
+	tests := []struct {
+		name    string
+		sudo    system.SudoStatus
+		refresh bool
+		want    resource.Change
+		wantErr string
+	}{
+		{
+			name:    "sudo without a password: refreshed, and a typo is caught",
+			sudo:    system.SudoNoPassword,
+			refresh: true,
+			wantErr: "unknown package fsh: the enabled repos don't have it",
+		},
+		{
+			name: "sudo needs a password: checked before installing",
+			sudo: system.SudoNeedsPassword,
+			want: resource.Change{Action: resource.Create, Summary: "install fsh"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestSystem(t, config.Ubuntu)
+			s.lists(3 * time.Hour)
+			s.runner.SudoStatus = tt.sudo
+			s.on("dpkg-query -W", result(1, "", "dpkg-query: no packages found matching fsh\n"))
+			s.on("apt-get update", result(0, "", ""))
+			s.on("apt-cache policy", result(0, "", ""))
+
+			rs := Set(s.rt, "packages", []string{"fsh"})
+			changes, errs := s.check(rs)
+			wantResults(t, rs, changes, errs, []resource.Change{tt.want}, []string{tt.wantErr})
+			refreshed := slices.Contains(s.runner.RootCommands(), "apt-get update")
+			if refreshed != tt.refresh {
+				t.Errorf("refreshed the lists during the plan: %t, want %t", refreshed, tt.refresh)
+			}
+		})
 	}
 }
 
