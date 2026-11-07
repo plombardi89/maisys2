@@ -541,14 +541,20 @@ func TestValidateAll(t *testing.T) {
 		"profiles/broken.toml:2:1: unknown key tool.versions",
 		`profiles/unused.toml:1:6: os must be fedora, ubuntu or windows, not "debian"`,
 	}
-	if got := errorLines(repo.ValidateAll()); !slices.Equal(got, want) {
+	if got := errorLines(validateAllErr(repo)); !slices.Equal(got, want) {
 		t.Errorf("errors:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
 func TestValidateAllWithoutMachines(t *testing.T) {
-	err := (&config.Repo{FS: fstest.MapFS{"maisys.toml": file(`config_version = 1`)}, Modules: validationModules()}).ValidateAll()
+	_, err := (&config.Repo{FS: fstest.MapFS{"maisys.toml": file(`config_version = 1`)}, Modules: validationModules()}).ValidateAll()
 	if want := "machines/ has no machine files"; err == nil || err.Error() != want {
 		t.Errorf("error = %v, want %q", err, want)
 	}
+}
+
+// validateAllErr returns ValidateAll's error.
+func validateAllErr(r *config.Repo) error {
+	_, err := r.ValidateAll()
+	return err
 }

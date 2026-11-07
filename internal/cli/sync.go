@@ -151,7 +151,11 @@ func (s *syncRun) pull() error {
 // validate checks this machine's config, and prints the problems it finds.
 func (s *syncRun) validate() error {
 	errOut := s.cmd.ErrOrStderr()
-	if _, err := s.repo.Validate(s.machine); err != nil {
+	m, err := s.repo.Validate(s.machine)
+	if m != nil {
+		printWarnings(errOut, m.Warnings)
+	}
+	if err != nil {
 		return problems(errOut, err)
 	}
 	s.g.debugf(errOut, "the config for %s is valid", s.machine)

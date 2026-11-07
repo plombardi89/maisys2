@@ -75,6 +75,10 @@ type ModuleInfo struct {
 //   - tables keyed by name (map fields) are merged entry by entry, and new
 //     entries start from their type's defaults (see Defaulter);
 //   - lists tagged merge:"union" combine across layers, without duplicates.
+//
+// A field tagged deprecated:"<what to use instead>" still works, but every
+// file that sets it gets a warning (see Machine.Warnings), and the docs say
+// so. Deprecated keys are removed only with a new config_version.
 type ModuleConfig interface {
 	IsEnabled() bool
 }
@@ -135,6 +139,10 @@ type Machine struct {
 	// it lists every file that added to them, in order. The machine file's
 	// own keys (os, os_version, arch and profiles) are recorded too.
 	Origins map[string][]string
+
+	// Warnings are problems that don't stop the config from being used,
+	// such as deprecated keys, each starting with file:line:column.
+	Warnings []string
 
 	// layers lists the files merged into the machine, in order: its
 	// profiles, then its machine file.

@@ -19,6 +19,14 @@ type Docs map[string]string
 // paragraph. Field docs start with the field's Go name, which is replaced
 // with its TOML key in backticks. Fields without a doc return "".
 func (d Docs) Field(t reflect.Type, f reflect.StructField) string {
+	doc := d.fieldDoc(t, f)
+	if note := f.Tag.Get("deprecated"); note != "" {
+		doc = strings.TrimSpace(doc + " Deprecated: " + note)
+	}
+	return doc
+}
+
+func (d Docs) fieldDoc(t reflect.Type, f reflect.StructField) string {
 	if t.Name() == "" {
 		return ""
 	}

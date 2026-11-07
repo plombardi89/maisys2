@@ -258,7 +258,7 @@ func checkScaffold(files map[string]string, url string) error {
 		fsys[name] = &fstest.MapFile{Data: []byte(data), Mode: 0o644}
 	}
 	r := &config.Repo{FS: fsys, Modules: modules.All(), URL: url}
-	if err := r.ValidateAll(); err != nil {
+	if _, err := r.ValidateAll(); err != nil {
 		return fmt.Errorf("the starter config doesn't pass validation, so it wasn't written:\n%w", err)
 	}
 	return nil

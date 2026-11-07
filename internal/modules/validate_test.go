@@ -20,7 +20,7 @@ func TestExampleValidates(t *testing.T) {
 		Modules: modules.All(),
 		URL:     "git@github.com:plombardi89/maisys-config.git",
 	}
-	if err := repo.ValidateAll(); err != nil {
+	if _, err := repo.ValidateAll(); err != nil {
 		t.Errorf("ValidateAll:\n%v", err)
 	}
 

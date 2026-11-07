@@ -123,20 +123,21 @@ func (r *Repo) MachineNames() ([]string, error) {
 }
 
 // ValidateAll validates every machine in the repo, and reads every profile,
-// including those no machine lists. It returns every problem it finds,
-// each reported once, even if it affects several machines.
-func (r *Repo) ValidateAll() error {
+// including those no machine lists. It returns every problem it finds, and
+// every warning (see Machine.Warnings), each reported once, even if it
+// affects several machines.
+func (r *Repo) ValidateAll() (warnings []string, err error) {
 	schema, err := newSchema(r.Modules)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	machines, badMachines, err := r.names(machinesDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	profiles, badProfiles, err := r.names(profilesDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var errs []error
@@ -147,8 +148,15 @@ func (r *Repo) ValidateAll() error {
 		errs = append(errs, fmt.Errorf("%s/ has no machine files", machinesDir))
 	}
 	for _, name := range machines {
-		_, err := r.Validate(name)
+		m, err := r.Validate(name)
 		errs = append(errs, err)
+		if m != nil {
+			for _, w := range m.Warnings {
+				if !slices.Contains(warnings, w) {
+					warnings = append(warnings, w)
+				}
+			}
+		}
 	}
 	for _, name := range badProfiles {
 		errs = append(errs, fmt.Errorf("%s: invalid profile name %q: %s", profileFile(name), name, NameRule))
@@ -164,7 +172,7 @@ func (r *Repo) ValidateAll() error {
 			errs = append(errs, fmt.Errorf("%s: %s", l.locs.where(file, "os"), invalidOS(osName)))
 		}
 	}
-	return errors.Join(unique(errs)...)
+	return warnings, errors.Join(unique(errs)...)
 }
 
 // names returns the names of the .toml files in dir, sorted, split into

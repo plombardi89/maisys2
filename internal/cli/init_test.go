@@ -249,7 +249,7 @@ func TestConfigInit(t *testing.T) {
 			}
 
 			repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All()}
-			if err := repo.ValidateAll(); err != nil {
+			if _, err := repo.ValidateAll(); err != nil {
 				t.Errorf("the starter config isn't valid:\n%v", err)
 			}
 			marker, err := repo.ReadMarker()
@@ -599,7 +599,7 @@ func TestConfigInitWindowsSSHRemote(t *testing.T) {
 		t.Errorf("the machine file doesn't contain %q:\n%s", want, data)
 	}
 	repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: "git@example.invalid:phil/config.git"}
-	if err := repo.ValidateAll(); err != nil {
+	if _, err := repo.ValidateAll(); err != nil {
 		t.Errorf("the starter config isn't valid:\n%v", err)
 	}
 }
@@ -724,7 +724,7 @@ func TestConfigInitExamples(t *testing.T) {
 	}
 	writeFiles(t, dir, map[string]string{"profiles/base.toml": strings.Join(blocks, "\n\n")})
 	repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All()}
-	if err := repo.ValidateAll(); err != nil {
+	if _, err := repo.ValidateAll(); err != nil {
 		t.Fatalf("the config with golang turned on isn't valid:\n%v", err)
 	}
 	m, err := repo.LoadMachine("desktop-7q2k3f-wsl")

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -124,7 +125,9 @@ func validateConfig(cmd *cobra.Command, g *globalOptions, all bool) error {
 	}
 
 	if all {
-		if err := r.ValidateAll(); err != nil {
+		warnings, err := r.ValidateAll()
+		printWarnings(errOut, warnings)
+		if err != nil {
 			return problems(errOut, err)
 		}
 		names, err := r.MachineNames()
@@ -144,9 +147,20 @@ func validateConfig(cmd *cobra.Command, g *globalOptions, all bool) error {
 		return err
 	}
 	g.debugf(errOut, "machine %s (from %s)", name, source)
-	if _, err := r.Validate(name); err != nil {
+	m, err := r.Validate(name)
+	if m != nil {
+		printWarnings(errOut, m.Warnings)
+	}
+	if err != nil {
 		return problems(errOut, err)
 	}
 	_, err = fmt.Fprintf(out, "maisys: the config for %s is valid\n", name)
 	return err
+}
+
+// printWarnings prints warnings about the config, such as deprecated keys.
+func printWarnings(w io.Writer, warnings []string) {
+	for _, warning := range warnings {
+		_, _ = fmt.Fprintf(w, "maisys: warning: %s\n", warning)
+	}
 }

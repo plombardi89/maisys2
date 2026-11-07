@@ -118,7 +118,7 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 	for _, l := range layers {
 		m.layers = append(m.layers, l.path)
 		m.locs[l.path] = l.locs
-		mg := &merger{file: l.path, origins: m.Origins}
+		mg := &merger{file: l.path, origins: m.Origins, locs: l.locs, warnings: &m.Warnings}
 		for i, name := range schema.names {
 			present, ok := l.present[name].(map[string]any)
 			if !ok {
