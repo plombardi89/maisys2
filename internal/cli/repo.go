@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -79,22 +80,53 @@ func (g *globalOptions) openRepo(cmd *cobra.Command) (*configRepo, error) {
 	g.debugf(errOut, "config repo %s (from %s)", dir, source)
 
 	r.dir = dir
-	r.Repo = &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: url}
+	r.Repo = newRepo(dir, url)
+	if err := r.checkMarker(errOut, nil); err != nil {
+		return nil, notConfigRepo(err, dir)
+	}
+	return r, nil
+}
+
+// newRepo returns the config repo in dir, whose URL is url.
+func newRepo(dir, url string) *config.Repo {
+	return &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: url}
+}
+
+// checkMarker reads the repo's maisys.toml, prints its warnings, and fails
+// if this maisys can't read the config. warned, if not nil, holds the
+// warnings already printed, which aren't printed again. A repo without a
+// maisys.toml fails with an error that wraps config.ErrNotConfigRepo.
+func (r *configRepo) checkMarker(errOut io.Writer, warned map[string]bool) error {
 	marker, err := r.ReadMarker()
 	switch {
 	case errors.Is(err, config.ErrNotConfigRepo):
-		return nil, fmt.Errorf("%s: %w", dir, err)
+		return err
 	case err != nil:
-		return nil, problems(errOut, err)
+		return problems(errOut, err)
 	}
 	warnings, err := marker.Check(buildVersion())
 	for _, w := range warnings {
+		if warned[w] {
+			continue
+		}
+		if warned != nil {
+			warned[w] = true
+		}
 		_, _ = fmt.Fprintf(errOut, "maisys: warning: %s\n", w)
 	}
 	if err != nil {
-		return nil, problems(errOut, err)
+		return problems(errOut, err)
 	}
-	return r, nil
+	return nil
+}
+
+// notConfigRepo adds the folder to err if it says the repo in dir has no
+// maisys.toml.
+func notConfigRepo(err error, dir string) error {
+	if errors.Is(err, config.ErrNotConfigRepo) {
+		return fmt.Errorf("%s: %w", dir, err)
+	}
+	return err
 }
 
 // repoAbove returns the working directory, or the closest folder above it,

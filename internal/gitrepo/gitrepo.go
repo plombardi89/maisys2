@@ -76,7 +76,7 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 		return nil, err
 	}
 	r := &Repo{Dir: dir, Options: opts}
-	shown := redact(url)
+	shown := Redact(url)
 	args := append(append([]string{"clone"}, opts.progressFlag()...), "--", url, dir)
 
 	if isHTTPS(url) && opts.Auth.Token != "" {
@@ -120,7 +120,7 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 // cloneWithPrompt asks for a token, saves it and clones with it, then sets up
 // the clone to keep using it.
 func (r *Repo) cloneWithPrompt(ctx context.Context, url string, args []string) (*Repo, error) {
-	shown := redact(url)
+	shown := Redact(url)
 	file := r.Auth.CredentialsFile
 	token, err := r.Auth.Prompt(ctx, shown)
 	if err != nil {
@@ -262,7 +262,7 @@ func (r *Repo) Pull(ctx context.Context) error {
 		return fmt.Errorf("couldn't pull the config repo in %s: %w", r.Dir, err)
 	case strings.Contains(ge.stderr, "Not possible to fast-forward"):
 		return fmt.Errorf("%w in %s: both it and %s have new commits. Merge or rebase them by hand, or run \"maisys sync --local\" to use the clone as it is",
-			ErrNoFastForward, r.Dir, redact(url))
+			ErrNoFastForward, r.Dir, Redact(url))
 	case authFailed(ge.stderr) || (withToken && repoNotFound(ge.stderr)):
 		return r.pullAuthError(ctx, url, ge, withToken)
 	}
@@ -331,12 +331,12 @@ func (r *Repo) Push(ctx context.Context) error {
 		if withToken {
 			fix = "The token in MAISYS_CONFIG_TOKEN was rejected, or can't write to the repo. Set it to an access token that can write to the repo, or unset it to use git's own sign-in"
 		}
-		return fmt.Errorf("%w to %s to push (%s).\nPushing needs write access. %s", ErrAuth, redact(url), ge.message(), fix)
+		return fmt.Errorf("%w to %s to push (%s).\nPushing needs write access. %s", ErrAuth, Redact(url), ge.message(), fix)
 	}
 	if ok {
-		return fmt.Errorf("couldn't push %s to %s: %s", r.Dir, redact(url), ge.message())
+		return fmt.Errorf("couldn't push %s to %s: %s", r.Dir, Redact(url), ge.message())
 	}
-	return fmt.Errorf("couldn't push %s to %s: %w", r.Dir, redact(url), err)
+	return fmt.Errorf("couldn't push %s to %s: %w", r.Dir, Redact(url), err)
 }
 
 func (o *Options) progressFlag() []string {

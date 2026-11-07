@@ -650,8 +650,8 @@ func TestURLKinds(t *testing.T) {
 		if got := isSSH(tt.url); got != tt.ssh {
 			t.Errorf("isSSH(%q) = %v, want %v", tt.url, got, tt.ssh)
 		}
-		if got := redact(tt.url); got != tt.redacted {
-			t.Errorf("redact(%q) = %q, want %q", tt.url, got, tt.redacted)
+		if got := Redact(tt.url); got != tt.redacted {
+			t.Errorf("Redact(%q) = %q, want %q", tt.url, got, tt.redacted)
 		}
 	}
 }

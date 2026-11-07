@@ -24,6 +24,11 @@ type testEnv struct {
 	stdin    string
 	terminal bool
 	system   facts.System
+	// gitEnv and findGit are how maisys runs git. useGit sets them up.
+	gitEnv  []string
+	findGit func() (string, error)
+	// gitBin is the git binary the test runs itself.
+	gitBin string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -63,6 +68,8 @@ func (e *testEnv) environment(stdout, stderr *bytes.Buffer) *environment {
 		},
 		isTerminal: func() bool { return e.terminal },
 		goos:       runtime.GOOS,
+		gitEnv:     e.gitEnv,
+		findGit:    e.findGit,
 	}
 }
 
@@ -147,9 +154,6 @@ func TestPlaceholderCommands(t *testing.T) {
 		args []string
 		name string
 	}{
-		{[]string{"sync"}, "sync"},
-		{[]string{"sync", "https://example.com/config.git", "--dry-run", "--only", "golang,kubectl"}, "sync"},
-		{[]string{"sync", "-n", "-y", "--local", "--machine", "box", "--dir", "/tmp/cfg"}, "sync"},
 		{[]string{"config", "init", "/tmp/cfg", "--machine", "box", "--remote", "https://example.com/c.git"}, "config init"},
 		{[]string{"status", "-v"}, "status"},
 	}
@@ -198,6 +202,9 @@ func TestSyncSelfUpdateStep(t *testing.T) {
 	_, _, stderr := run(t, "sync", "-v")
 	if !strings.Contains(stderr, devMsg) {
 		t.Errorf("sync -v: stderr = %q, want it to contain %q", stderr, devMsg)
+	}
+	if !strings.HasSuffix(stderr, "maisys: "+notSetUp+"\n") {
+		t.Errorf("sync -v: stderr = %q, want the sync to carry on to the first-run setup", stderr)
 	}
 
 	_, _, stderr = run(t, "sync", "-v", "--local")

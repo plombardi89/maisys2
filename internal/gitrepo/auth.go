@@ -95,7 +95,7 @@ func (r *Repo) credentialsFile(ctx context.Context) string {
 func SaveToken(file, rawURL, token string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Host == "" {
-		return fmt.Errorf("can't save a token for %s: it isn't an HTTPS URL", redact(rawURL))
+		return fmt.Errorf("can't save a token for %s: it isn't an HTTPS URL", Redact(rawURL))
 	}
 	if err := checkToken("the access token", token); err != nil {
 		return err
@@ -254,7 +254,7 @@ func otherAuthError(rawURL string, ge *gitError) error {
 	if isSSH(rawURL) {
 		fix = "Check that your SSH key is loaded (ssh-add -l lists them) and can read the repo, or use the repo's HTTPS URL"
 	}
-	return fmt.Errorf("%w to %s (%s).\n%s", ErrAuth, redact(rawURL), ge.message(), fix)
+	return fmt.Errorf("%w to %s (%s).\n%s", ErrAuth, Redact(rawURL), ge.message(), fix)
 }
 
 // pullAuthError is the error for a pull that couldn't sign in, usually
@@ -274,7 +274,7 @@ func (r *Repo) pullAuthError(ctx context.Context, rawURL string, ge *gitError, w
 		}
 	}
 	return fmt.Errorf("%w to %s to pull the config repo (%s).\n%s\nRun \"maisys sync --local\" to carry on with the copy you already have",
-		ErrAuth, redact(rawURL), ge.message(), fix)
+		ErrAuth, Redact(rawURL), ge.message(), fix)
 }
 
 func isHTTPS(rawURL string) bool {
@@ -298,8 +298,8 @@ func isSSH(rawURL string) bool {
 	return ok && len(host) > 1 && !strings.ContainsAny(host, `/\`)
 }
 
-// redact hides any credentials in a URL, so it can be shown.
-func redact(rawURL string) string {
+// Redact hides any credentials in a URL, so it can be shown.
+func Redact(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.User == nil {
 		return rawURL
