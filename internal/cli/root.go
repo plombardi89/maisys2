@@ -2,15 +2,21 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/plombardi89/maisys2/internal/buildinfo"
+	"github.com/plombardi89/maisys2/internal/config"
+	"github.com/plombardi89/maisys2/internal/facts"
 )
 
 // Exit codes returned by Execute.
@@ -31,20 +37,48 @@ func (e exitCodeError) Error() string {
 	return fmt.Sprintf("exit status %d", e.code)
 }
 
-// globalOptions holds settings that apply to every command.
+// environment is what maisys uses from outside itself: the standard
+// streams, environment variables, the working directory and the live
+// system. Execute uses the process's own; tests make their own.
+type environment struct {
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+	getenv func(string) string
+	getwd  func() (string, error)
+	// detect detects the system maisys is running on.
+	detect func() (*facts.System, error)
+	// isTerminal reports whether stdin and stdout are both terminals, so
+	// maisys can ask questions.
+	isTerminal func() bool
+	// goos is the OS maisys runs on, as a GOOS value. It decides where
+	// maisys keeps its files.
+	goos string
+}
+
+// globalOptions holds settings that apply to every command, and the
+// environment the commands run in.
 type globalOptions struct {
+	*environment
+
 	verbose bool
 	color   bool
 	args    []string // the command line, without the program name
-	getenv  func(string) string
+
+	// in reads stdin. Every question maisys asks shares it, so none of
+	// them loses input another one has buffered.
+	in *bufio.Reader
+	// system is the live system, once detected.
+	system *facts.System
 }
 
-func newGlobalOptions(args []string, getenv func(string) string) *globalOptions {
+func newGlobalOptions(args []string, env *environment) *globalOptions {
 	return &globalOptions{
+		environment: env,
 		// https://no-color.org: any non-empty NO_COLOR value turns colour off.
-		color:  getenv("NO_COLOR") == "",
-		args:   args,
-		getenv: getenv,
+		color: env.getenv("NO_COLOR") == "",
+		args:  args,
+		in:    bufio.NewReader(env.stdin),
 	}
 }
 
@@ -55,19 +89,58 @@ func (g *globalOptions) debugf(w io.Writer, format string, a ...any) {
 	}
 }
 
+// liveSystem returns the system maisys is running on, detecting it the
+// first time.
+func (g *globalOptions) liveSystem() (*facts.System, error) {
+	if g.system == nil {
+		s, err := g.detect()
+		if err != nil {
+			return nil, fmt.Errorf("detecting this system: %w", err)
+		}
+		g.system = s
+	}
+	return g.system, nil
+}
+
 // Execute runs the maisys command line with args (without the program name)
 // and returns the process exit code.
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
-	root := newRootCommand(newGlobalOptions(args, getenv))
+	return execute(ctx, args, &environment{
+		stdin:  os.Stdin,
+		stdout: stdout,
+		stderr: stderr,
+		getenv: getenv,
+		getwd:  os.Getwd,
+		detect: facts.Detect,
+		isTerminal: func() bool {
+			return isTerminal(os.Stdin) && isTerminal(stdout)
+		},
+		goos: runtime.GOOS,
+	})
+}
+
+// isTerminal reports whether f, a stream, is a terminal.
+func isTerminal(f any) bool {
+	fd, ok := f.(interface{ Fd() uintptr })
+	return ok && term.IsTerminal(int(fd.Fd()))
+}
+
+// execute is Execute in env.
+func execute(ctx context.Context, args []string, env *environment) int {
+	root := newRootCommand(newGlobalOptions(args, env))
 	root.SetArgs(args)
-	root.SetOut(stdout)
-	root.SetErr(stderr)
+	root.SetIn(env.stdin)
+	root.SetOut(env.stdout)
+	root.SetErr(env.stderr)
 
 	if err := root.ExecuteContext(ctx); err != nil {
 		if exit, ok := errors.AsType[exitCodeError](err); ok {
 			return exit.code
 		}
-		_, _ = fmt.Fprintf(stderr, "maisys: %v\n", err)
+		_, _ = fmt.Fprintf(env.stderr, "maisys: %v\n", err)
+		if errors.Is(err, config.ErrUnknownKey) {
+			_, _ = fmt.Fprintf(env.stderr, "maisys: an unknown key may mean the config needs a newer maisys than this one (%s)\n", buildVersion())
+		}
 		return exitError
 	}
 	return exitOK
@@ -101,4 +174,39 @@ and keeps it up to date with "maisys sync".`,
 func notImplemented(cmd *cobra.Command, _ []string) error {
 	name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	return fmt.Errorf("%q is %w", name, errNotImplemented)
+}
+
+// problemsError reports how many problems a command found in the config,
+// after it has printed them. It wraps the problems, so errors.Is sees
+// what they wrap.
+type problemsError struct {
+	count int
+	err   error
+}
+
+func (e problemsError) Error() string {
+	if e.count == 1 {
+		return "1 problem found"
+	}
+	return fmt.Sprintf("%d problems found", e.count)
+}
+
+func (e problemsError) Unwrap() error {
+	return e.err
+}
+
+// problems prints each problem in err, which may be several joined with
+// errors.Join, on its own line of w, and returns a problemsError for them.
+// Config problems already start with file:line:column.
+func problems(w io.Writer, err error) error {
+	n := 0
+	for line := range strings.Lines(err.Error()) {
+		line = strings.TrimRight(line, "\r\n")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		_, _ = fmt.Fprintln(w, line)
+		n++
+	}
+	return problemsError{count: n, err: err}
 }
