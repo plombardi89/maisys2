@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,12 @@ type Runtime struct {
 	Paths settings.Paths
 	// Machine is the machine's merged config.
 	Machine *config.Machine
+	// Modules are every module of the sync, enabled or not, so a module
+	// can ask the others (the shell module collects their environment).
+	Modules []config.Module
+	// RepoFS is the config repo's files, such as the files module's
+	// sources and the shells' snippets. It may be nil in tests.
+	RepoFS fs.FS
 	// Previous returns the state file's record of the resource with the
 	// given ID, as the last sync that applied it left it, and whether
 	// there is one.

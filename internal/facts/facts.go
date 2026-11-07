@@ -24,6 +24,10 @@ type System struct {
 	// VERSION_ID from os-release on Linux (for example "44" or "26.04"), or
 	// the build number on Windows (for example "26100").
 	OSVersion string
+	// OSCodename is VERSION_CODENAME from os-release, such as "noble" on
+	// Ubuntu 24.04. Ubuntu's package repos are named after it. It may be
+	// empty.
+	OSCodename string
 	// PrettyName is the OS's name and version for people to read, for
 	// example "Fedora Linux 44 (Workstation Edition)".
 	PrettyName string
