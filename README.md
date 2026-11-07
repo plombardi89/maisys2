@@ -3,7 +3,7 @@
 maisys sets up and maintains development machines from a config repo that you keep in git. It runs on Fedora and Ubuntu, and on Windows 11 it installs WSL and sets up WSL distros.
 
 > [!NOTE]
-> maisys is in early development and doesn't do anything useful yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
+> maisys is in early development. It can create, check and sync a config repo, but it doesn't change your machine yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
 
 ## Installing
 
@@ -16,6 +16,22 @@ curl -fsSL https://github.com/plombardi89/maisys2/releases/latest/download/insta
 This installs `maisys` to `~/.local/bin` and runs `maisys sync CONFIG-URL`. Leave out `CONFIG-URL` to install without syncing. Any other arguments are passed to `maisys sync`.
 
 To remove maisys itself (the binary, settings, state and caches), run the same command with `--uninstall` in place of `CONFIG-URL`. Tools, files and packages that maisys installed are left in place.
+
+## Your config repo
+
+maisys reads everything it does from a config repo in git: a `machines/` file for each machine, and `profiles/` that machines share. To start one, run:
+
+```sh
+maisys config init
+```
+
+This creates `~/maisys-config` with a machine file for this machine and every module listed, commented out, in `profiles/base.toml`. Then:
+
+- `maisys config` shows this machine's merged config, and `maisys config --explain` shows which file set each value.
+- `maisys config validate` checks it, and `maisys config validate --all` checks every machine (the repo's own CI runs this).
+- `maisys sync CONFIG-URL` sets up another machine from the same repo once it's pushed somewhere git can reach. For a private repo over HTTPS, maisys uses git's own sign-in, asks for a read-only token if git can't sign in, or uses `MAISYS_CONFIG_TOKEN`.
+
+The modules and their settings are described in [docs/modules.md](docs/modules.md). Editors that understand JSON schemas for TOML can complete and check config files with `config.schema.json`, which is published with each release.
 
 ## Updating
 
@@ -30,6 +46,7 @@ make build     # builds bin/maisys
 make test      # runs the unit tests
 make lint      # lints Go code, shell scripts and GitHub workflows
 make fmt       # formats Go code (gofumpt, goimports) and shell scripts (shfmt)
+make generate  # regenerates docs/modules.md and the config schema from the module configs
 make snapshot  # builds the release archives into dist/ without publishing
 ```
 
