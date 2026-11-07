@@ -1,0 +1,13 @@
+Plan for workbox-camwin (windows 11 26100, amd64)
+
+winget
+  + install Microsoft.WindowsTerminal
+wsl_host
+  + install WSL                                 [admin]
+  + write ~\.wslconfig (run `wsl --shutdown` to apply)
+  + create distro fedora-dev (FedoraLinux-44), user phil
+  + set up fedora-dev with Linux machine workbox-camwin-fc44
+windows_terminal
+  ~ default profile → fedora-dev
+
+6 to change. Needs admin.

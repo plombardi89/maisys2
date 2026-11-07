@@ -167,7 +167,7 @@ func (r *ExecRunner) StartSudo(ctx context.Context) error {
 	}
 	opts := r.opts.Sudo
 	term := &terminal{stdin: opts.Stdin, stdout: opts.Stdout, stderr: opts.Stderr}
-	res, err := r.run(ctx, Cmd{Name: path, Args: []string{"-v"}, Label: "sudo -v"}, term)
+	res, err := r.run(ctx, Cmd{Name: path, Args: []string{"-v"}, Label: "sudo -v", Interactive: true}, term)
 	if err != nil {
 		if _, ok := errors.AsType[*ExitError](err); !ok {
 			return fmt.Errorf("couldn't start sudo: %w", err)
