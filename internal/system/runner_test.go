@@ -265,21 +265,43 @@ func TestCmdString(t *testing.T) {
 	}
 }
 
-func TestNoSudoOnWindows(t *testing.T) {
+// TestAdminOnWindows checks that the runner on Windows runs commands as
+// admin through its admin session rather than sudo: directly if the tests
+// run elevated, as on CI, and otherwise not until the elevated helper is
+// started, which this test never does, as it would show a UAC prompt.
+func TestAdminOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("maisys uses sudo everywhere but Windows")
 	}
 	r := NewRunner(Options{})
-	if _, err := r.Run(t.Context(), Cmd{Name: "whoami", Root: true}); err == nil || !strings.Contains(err.Error(), "only uses on Linux") {
-		t.Errorf("Run() as root: error = %v, want one saying sudo is only used on Linux", err)
+	if r.admin == nil {
+		t.Fatal("the runner has no admin session")
 	}
-	if _, err := r.CheckSudo(t.Context()); !errors.Is(err, errNoSudo) {
-		t.Errorf("CheckSudo() error = %v, want errNoSudo", err)
+	c := helperCmd(t, "exit", "0", "as admin", "")
+	c.Root = true
+	status, err := r.CheckSudo(t.Context())
+	if err != nil {
+		t.Fatalf("CheckSudo() error = %v", err)
 	}
-	if err := r.StartSudo(t.Context()); !errors.Is(err, errNoSudo) {
-		t.Errorf("StartSudo() error = %v, want errNoSudo", err)
+	if r.admin.elevated {
+		if status != SudoNoPassword {
+			t.Errorf("CheckSudo() elevated = %q, want SudoNoPassword", status)
+		}
+		if res, err := r.Run(t.Context(), c); err != nil || string(res.Stdout) != "as admin" {
+			t.Errorf("Run() as admin, elevated = %+v, %v; want it run directly", res, err)
+		}
+		if err := r.StartSudo(t.Context()); err != nil {
+			t.Errorf("StartSudo() elevated: error = %v", err)
+		}
+		r.StopSudo()
+	} else {
+		if status != SudoNeedsPassword {
+			t.Errorf("CheckSudo() unelevated = %q, want SudoNeedsPassword", status)
+		}
+		if _, err := r.Run(t.Context(), c); !errors.Is(err, ErrNeedsAdmin) {
+			t.Errorf("Run() as admin, unelevated: error = %v, want ErrNeedsAdmin", err)
+		}
 	}
-	r.StopSudo()
 	if err := InstallFile(t.Context(), r, []byte("x"), `C:\x`, 0o644); !errors.Is(err, errNoSudo) {
 		t.Errorf("InstallFile() error = %v, want errNoSudo", err)
 	}

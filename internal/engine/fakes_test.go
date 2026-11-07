@@ -92,6 +92,12 @@ func (r *fakeResource) sudo() *fakeResource {
 	return r
 }
 
+// mayReboot makes r's change one that may need a reboot.
+func (r *fakeResource) mayReboot() *fakeResource {
+	r.change.MayReboot = true
+	return r
+}
+
 func (r *fakeResource) ID() string        { return r.id }
 func (r *fakeResource) Kind() string      { return cmp.Or(r.kind, "fake") }
 func (r *fakeResource) Targets() []string { return r.targets }
@@ -184,10 +190,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 }
 
-// windows makes the machine a Windows host.
+// windows makes the machine a Windows host, where maisys isn't elevated.
 func (e *testEnv) windows() {
 	e.machine.OS = config.Windows
-	e.facts = &facts.System{OS: config.Windows, OSID: "windows", OSVersion: "26100", Arch: config.AMD64, RawArch: "amd64"}
+	e.runner.OS = config.Windows
+	e.facts = &facts.System{
+		OS: config.Windows, OSID: "windows", OSVersion: "26100", Arch: config.AMD64, RawArch: "amd64",
+		Windows: &facts.Windows{Admin: true},
+	}
 }
 
 // add adds an enabled module with resources rs, which record their steps.

@@ -10,4 +10,4 @@ wsl_host
 windows_terminal
   ~ default profile → fedora-dev
 
-6 to change. Needs admin.
+6 to change. Needs admin (1 UAC prompt). A reboot may be needed.

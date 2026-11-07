@@ -31,7 +31,7 @@ const (
 	// ResultFailed means the sync finished, but some steps failed.
 	ResultFailed Result = "failed"
 	// ResultInterrupted means the sync stopped partway, for example after
-	// Ctrl-C.
+	// Ctrl-C, or for a reboot that a change needs (on Windows).
 	ResultInterrupted Result = "interrupted"
 )
 

@@ -354,33 +354,44 @@ func TestPlanRemovals(t *testing.T) {
 }
 
 // TestPlanNeverPrompts plans checks that run commands as root while sudo
-// needs a password: they're checked during apply, and sudo is never
+// needs a password, or as admin on Windows while maisys isn't elevated:
+// they're checked during apply, and sudo or the elevated helper is never
 // started.
 func TestPlanNeverPrompts(t *testing.T) {
-	e := newTestEnv(t)
-	e.runner.SudoStatus = system.SudoNeedsPassword
-	check := func(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
-		_, err := rt.Runner.Run(ctx, system.Cmd{Name: "dpkg-query", Args: []string{"-W", "jq"}, Root: true})
-		return resource.Change{Summary: "install jq"}, err
-	}
-	e.add("packages", nil, &fakeResource{id: "package:jq", onCheck: check})
-	e.add("golang", nil, res("tool:golang", resource.NoChange, ""))
+	for _, windows := range []bool{false, true} {
+		t.Run(fmt.Sprintf("windows=%t", windows), func(t *testing.T) {
+			e := newTestEnv(t)
+			if windows {
+				e.windows()
+			}
+			e.runner.SudoStatus = system.SudoNeedsPassword
+			check := func(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
+				_, err := rt.Runner.Run(ctx, system.Cmd{Name: "dpkg-query", Args: []string{"-W", "jq"}, Root: true})
+				if windows && !errors.Is(err, system.ErrNeedsAdmin) {
+					t.Errorf("a check run as admin: error = %v, want ErrNeedsAdmin", err)
+				}
+				return resource.Change{Summary: "install jq"}, err
+			}
+			e.add("packages", nil, &fakeResource{id: "package:jq", onCheck: check})
+			e.add("golang", nil, res("tool:golang", resource.NoChange, ""))
 
-	p := e.plan()
-	item := p.Modules[0].Items[0]
-	if item.Err != nil || item.Change.Action != resource.Unknown || item.Change.Summary != "install jq" {
-		t.Errorf("the check that needs a password: change = %+v, error = %v; want Unknown with its summary", item.Change, item.Err)
-	}
-	if !p.HasChanges() || !p.NeedsPrivileges() || p.Failed() {
-		t.Errorf("HasChanges() = %t, NeedsPrivileges() = %t, Failed() = %t; want changes that need privileges", p.HasChanges(), p.NeedsPrivileges(), p.Failed())
-	}
-	if n := e.runner.SudoStarts(); n != 0 {
-		t.Errorf("the plan started sudo %d times", n)
-	}
-	for _, c := range e.runner.Calls() {
-		if c.Ran || c.InSession {
-			t.Errorf("command %s ran (in a session: %t)", c.Cmd, c.InSession)
-		}
+			p := e.plan()
+			item := p.Modules[0].Items[0]
+			if item.Err != nil || item.Change.Action != resource.Unknown || item.Change.Summary != "install jq" {
+				t.Errorf("the check that needs a password: change = %+v, error = %v; want Unknown with its summary", item.Change, item.Err)
+			}
+			if !p.HasChanges() || !p.NeedsPrivileges() || p.Failed() {
+				t.Errorf("HasChanges() = %t, NeedsPrivileges() = %t, Failed() = %t; want changes that need privileges", p.HasChanges(), p.NeedsPrivileges(), p.Failed())
+			}
+			if n := e.runner.SudoStarts(); n != 0 {
+				t.Errorf("the plan started sudo %d times", n)
+			}
+			for _, c := range e.runner.Calls() {
+				if c.Ran || c.InSession {
+					t.Errorf("command %s ran (in a session: %t)", c.Cmd, c.InSession)
+				}
+			}
+		})
 	}
 }
 

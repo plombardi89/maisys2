@@ -115,6 +115,11 @@ type Change struct {
 	// or admin on Windows. A resource's changes need it anyway if the
 	// resource is Privileged; a removal's need it only if this is set.
 	Privileged bool
+	// MayReboot reports whether applying the change may need a reboot
+	// before the rest of the sync can be applied, such as installing WSL
+	// for the first time. The plan says so. Whether it does is up to the
+	// resource, once it's applied (see RebootNeeder).
+	MayReboot bool
 }
 
 // Runtime is what resources check and apply with. It's shared by every
@@ -224,6 +229,20 @@ type Remover interface {
 	// Remove removes the thing rec records. Its record is deleted once
 	// Remove succeeds.
 	Remove(ctx context.Context, rt *Runtime, rec state.Record) error
+}
+
+// RebootNeeder is implemented by resources whose changes can need a reboot
+// before anything that depends on them works, such as installing WSL on
+// Windows. Once such a resource is applied, the engine asks it: if it
+// needs a reboot, its module's later changes and the modules that depend
+// on it wait for the next sync, which the user runs after rebooting, while
+// the rest of the sync carries on. Every change is safe to apply again, so
+// that sync picks up where this one stopped.
+type RebootNeeder interface {
+	// RebootNeeded reports whether the change the last Apply (or
+	// ApplyGroup) made needs a reboot, and why, in a few words, such as
+	// "WSL was installed".
+	RebootNeeded() (why string, needed bool)
 }
 
 // SyncStopper is implemented by errors that stop the whole sync, rather

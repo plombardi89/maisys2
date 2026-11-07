@@ -17,12 +17,13 @@ import (
 
 // ErrNeedsPassword means a command has to run as root, but sudo needs a
 // password and no sudo session has been started. Plans never ask for a
-// password, so they show such checks as checked during apply.
+// password, so they show such checks as checked during apply. On Windows,
+// ErrNeedsAdmin is the same for commands that need admin rights.
 var ErrNeedsPassword = errors.New("sudo needs a password")
 
-// errNoSudo is the error for running a command as root where maisys doesn't
-// use sudo: on Windows, steps that need admin rights run in an elevated
-// helper instead.
+// errNoSudo is the error for using sudo where maisys doesn't: on Windows,
+// commands that need admin rights run in the elevated helper instead, and
+// maisys writes no files as root.
 var errNoSudo = errors.New("running commands as root needs sudo, which maisys only uses on Linux")
 
 // SudoStatus is whether, and how, sudo can run commands as root.
@@ -143,6 +144,9 @@ type sudoSession struct {
 
 // CheckSudo checks sudo. See SudoRunner.
 func (r *ExecRunner) CheckSudo(ctx context.Context) (SudoStatus, error) {
+	if r.admin != nil {
+		return r.admin.check(), nil
+	}
 	s := &r.sudo
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,6 +155,9 @@ func (r *ExecRunner) CheckSudo(ctx context.Context) (SudoStatus, error) {
 
 // StartSudo starts the sudo session. See SudoRunner.
 func (r *ExecRunner) StartSudo(ctx context.Context) error {
+	if r.admin != nil {
+		return r.admin.start(ctx)
+	}
 	s := &r.sudo
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -206,6 +213,10 @@ func (r *ExecRunner) StartSudo(ctx context.Context) error {
 
 // StopSudo stops the sudo session. See SudoRunner.
 func (r *ExecRunner) StopSudo() {
+	if r.admin != nil {
+		r.admin.stop()
+		return
+	}
 	s := &r.sudo
 	s.mu.Lock()
 	stop, done := s.stop, s.done

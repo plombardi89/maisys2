@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/state"
 	"github.com/plombardi89/maisys2/internal/system"
@@ -51,8 +50,14 @@ type ModuleResult struct {
 	// Err is why the module failed, in the plan or while it was applied.
 	Err error
 	// SkippedBecause names the failed module this one depends on, if it
-	// was skipped because of it.
+	// was skipped because of it, or the module waiting for a reboot that
+	// it depends on.
 	SkippedBecause string
+	// Reboot says why the module stopped for a reboot, such as "WSL was
+	// installed", if a change it applied needs one (see
+	// resource.RebootNeeder). Its later changes, and the modules that
+	// depend on it, wait for the next sync.
+	Reboot string
 }
 
 // RemovalResult is what removing one thing did.
@@ -67,7 +72,8 @@ type RemovalResult struct {
 	// Err is why it couldn't be removed, if it couldn't.
 	Err error
 	// SkippedBecause names the failed module the record belongs to, or
-	// that this module depends on, if the removal was skipped.
+	// that this module depends on, if the removal was skipped; or the
+	// module waiting for a reboot.
 	SkippedBecause string
 }
 
@@ -76,14 +82,16 @@ type RemovalResult struct {
 // removals. Changes with Action Warn and Unknown are applied like Create
 // and Update. If any change needs root, the sudo session (the only thing
 // that may ask for a password) is started before the first step and
-// stopped at the end. Windows has no sudo: there, steps that need admin
-// rights will run in an elevated helper instead.
+// stopped at the end. On Windows, that's the elevated helper, which runs
+// the steps that need admin rights, with one UAC prompt.
 //
 // The state file is saved after every step. A step that fails makes its
 // module fail: the module's other changes and every module that depends on
 // it, directly or not, are skipped, as are the removals of their records,
 // and everything else carries on. Modules that failed in the plan count as
-// failed too.
+// failed too. A step that needs a reboot (see resource.RebootNeeder) stops
+// its module in the same way, but without failing: what it stops waits for
+// the next sync, after the reboot.
 //
 // Changes of resources in a group (resource.Grouped), such as package
 // installs, are applied in one step, with one call to ApplyGroup, when the
@@ -111,7 +119,7 @@ func Apply(ctx context.Context, p *Plan, in ApplyInput) *Result {
 	}
 
 	in.Store.Machine = p.Machine
-	if !a.done() && p.NeedsPrivileges() && p.rt.Machine.OS != config.Windows {
+	if !a.done() && p.NeedsPrivileges() {
 		if sudo, ok := p.rt.Runner.(system.SudoRunner); ok {
 			if a.sudoErr = sudo.StartSudo(a.step); a.sudoErr == nil {
 				defer sudo.StopSudo()
@@ -128,8 +136,11 @@ func Apply(ctx context.Context, p *Plan, in ApplyInput) *Result {
 	switch {
 	case a.res.Interrupted:
 		result = state.ResultInterrupted
-	case !a.res.OK():
+	case a.res.failed():
 		result = state.ResultFailed
+	case a.res.RebootNeeded():
+		// It stopped partway, for the reboot.
+		result = state.ResultInterrupted
 	}
 	in.Store.LastSync = p.rt.Now()
 	in.Store.LastSyncResult = result
@@ -148,8 +159,9 @@ type applier struct {
 	// step is the context steps run with, which only in.Abort cancels.
 	step context.Context
 	res  *Result
-	// stopped maps each module that failed or was skipped to the failed
-	// module that caused it.
+	// stopped maps each module that failed, was skipped or waits for a
+	// reboot to the module that caused it: the one that failed, or the one
+	// that needs the reboot.
 	stopped map[string]string
 	// finished holds the modules that have been applied, failed or
 	// skipped.
@@ -234,17 +246,42 @@ func (a *applier) module(i int, mr *ModuleResult) {
 				return
 			}
 			mr.Err = fmt.Errorf("%s: %w", item.summary(), err)
-			a.stopped[m.Name] = m.Name
-			// Later changes applied with their group were applied all the same.
-			for _, later := range m.Items[k+1:] {
-				if err, ok := a.grouped[later]; ok && err == nil {
-					mr.Applied++
-				}
-			}
+			a.stop(m, k, mr)
 			return
 		}
 		mr.Applied++
+		if why, ok := rebootNeeded(item.Resource); ok {
+			mr.Reboot = why
+			a.stop(m, k, mr)
+			return
+		}
 	}
+}
+
+// stop stops module m at its item k, which failed or needs a reboot,
+// recording in mr how many of its later changes were applied all the same,
+// with their group.
+func (a *applier) stop(m *ModulePlan, k int, mr *ModuleResult) {
+	a.stopped[m.Name] = m.Name
+	for _, later := range m.Items[k+1:] {
+		if err, ok := a.grouped[later]; ok && err == nil {
+			mr.Applied++
+		}
+	}
+}
+
+// rebootNeeded reports whether the resource r, just applied, needs a
+// reboot, and why.
+func rebootNeeded(r resource.Resource) (string, bool) {
+	rn, ok := r.(resource.RebootNeeder)
+	if !ok {
+		return "", false
+	}
+	why, needed := rn.RebootNeeded()
+	if why == "" {
+		why = resource.Describe(r.ID()) + " was applied"
+	}
+	return why, needed
 }
 
 // needsSudo reports whether applying item needs root, which the sudo
@@ -418,37 +455,58 @@ func (r *Result) Applied() (changes, removals int) {
 	return changes, removals
 }
 
-// OK reports whether everything was applied: nothing failed or was
-// skipped, and Apply wasn't interrupted.
+// OK reports whether everything was applied: nothing failed, was skipped
+// or waits for a reboot, and Apply wasn't interrupted.
 func (r *Result) OK() bool {
+	return !r.failed() && !r.RebootNeeded()
+}
+
+// RebootNeeded reports whether a change that was applied needs a reboot
+// before the rest of the plan can be: what waits for it is left for the
+// next sync.
+func (r *Result) RebootNeeded() bool {
+	return slices.ContainsFunc(r.Modules, func(m ModuleResult) bool { return m.Reboot != "" })
+}
+
+// waitsForReboot reports whether module stopped for a reboot.
+func (r *Result) waitsForReboot(module string) bool {
+	return slices.ContainsFunc(r.Modules, func(m ModuleResult) bool { return m.Name == module && m.Reboot != "" })
+}
+
+// failed reports whether anything failed or was skipped because something
+// failed, or Apply stopped early. Waiting for a reboot isn't failing.
+func (r *Result) failed() bool {
 	if r.Interrupted || r.Err != nil {
-		return false
+		return true
 	}
 	for _, m := range r.Modules {
-		if m.Err != nil || m.SkippedBecause != "" {
-			return false
+		if m.Err != nil || (m.SkippedBecause != "" && !r.waitsForReboot(m.SkippedBecause)) {
+			return true
 		}
 	}
 	for _, rm := range r.Removals {
-		if !rm.Removed {
-			return false
+		if !rm.Removed && (rm.Err != nil || !r.waitsForReboot(rm.SkippedBecause)) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-// ExitCode returns the exit code for the sync: 0 if everything was
-// applied, and 1 otherwise.
+// ExitCode returns the exit code for the sync: 1 if anything failed or was
+// skipped because something failed, or Apply was interrupted, and 0
+// otherwise, even if changes wait for a reboot: sync has an exit code of
+// its own for that (see RebootNeeded).
 func (r *Result) ExitCode() int {
-	if r.OK() {
-		return 0
+	if r.failed() {
+		return 1
 	}
-	return 1
+	return 0
 }
 
 // Render writes a short summary of what happened, such as "Applied 5
-// changes." followed by a line for each module that failed or was skipped
-// and each removal that didn't happen.
+// changes." followed by a line for each module that failed, was skipped or
+// waits for a reboot, and each removal that didn't happen; and, if a
+// reboot is needed, says to reboot and sync again.
 func (r *Result) Render(w io.Writer) {
 	var b strings.Builder
 	changes, removals := r.Applied()
@@ -466,6 +524,10 @@ func (r *Result) Render(w io.Writer) {
 		switch {
 		case m.Err != nil:
 			fmt.Fprintf(&b, "%s failed: %s\n", m.Name, indent(m.Err))
+		case m.Reboot != "":
+			fmt.Fprintf(&b, "%s needs a reboot before it can carry on: %s.\n", m.Name, m.Reboot)
+		case r.waitsForReboot(m.SkippedBecause):
+			fmt.Fprintf(&b, "%s waits for the reboot.\n", m.Name)
 		case m.SkippedBecause != "":
 			fmt.Fprintf(&b, "%s skipped because %s failed.\n", m.Name, m.SkippedBecause)
 		default:
@@ -475,6 +537,8 @@ func (r *Result) Render(w io.Writer) {
 		switch {
 		case rm.Err != nil:
 			fmt.Fprintf(&b, "Couldn't remove %s: %s\n", rm.Summary, indent(rm.Err))
+		case r.waitsForReboot(rm.SkippedBecause):
+			fmt.Fprintf(&b, "Didn't remove %s yet: it waits for the reboot.\n", rm.Summary)
 		case rm.SkippedBecause != "":
 			fmt.Fprintf(&b, "Didn't remove %s because %s failed.\n", rm.Summary, rm.SkippedBecause)
 		default:
@@ -485,9 +549,14 @@ func (r *Result) Render(w io.Writer) {
 		fmt.Fprintf(&b, "Stopped: %s\n", indent(r.Err))
 	case r.Interrupted:
 		b.WriteString("Interrupted: run maisys sync again to finish.\n")
+	case r.RebootNeeded():
+		b.WriteString(RebootNotice + "\n")
 	}
 	_, _ = io.WriteString(w, b.String())
 }
+
+// RebootNotice is how Render says what to do when a change needs a reboot.
+const RebootNotice = "Reboot, then run `maisys sync` again to finish."
 
 // plural returns "1 change" or "2 changes".
 func plural(n int, noun string) string {
