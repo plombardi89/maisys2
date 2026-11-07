@@ -45,7 +45,14 @@ func TestHelperOverPipe(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- ServeElevated(t.Context(), name, secret) }()
 
-	self := windows.CurrentProcess()
+	// A real handle to this process, not the pseudo-handle CurrentProcess
+	// returns, which WaitForMultipleObjects doesn't accept. Production code
+	// passes the helper's process handle.
+	self, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = windows.CloseHandle(self) }()
 	if err := connectPipe(t.Context(), pipe, self); err != nil {
 		_ = windows.CloseHandle(pipe)
 		t.Fatalf("connectPipe() error = %v", err)

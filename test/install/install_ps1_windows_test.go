@@ -209,7 +209,9 @@ func (h *psHarness) runOneLiner(args, after string) (stdout, stderr string, code
 func (h *psHarness) powershellRun(args ...string) (stdout, stderr string, code int) {
 	h.t.Helper()
 	cmd := exec.CommandContext(h.t.Context(), h.powershell, append([]string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"}, args...)...)
-	cmd.Env = append(environWithout("LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "MAISYS_RELEASE_URL", "MAISYS_USER_ENV_KEY"),
+	// PSModulePath is left out: CI runs the tests from PowerShell 7, whose
+	// modules Windows PowerShell 5.1 would try to load instead of its own.
+	cmd.Env = append(environWithout("LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "MAISYS_RELEASE_URL", "MAISYS_USER_ENV_KEY", "PSModulePath"),
 		"LOCALAPPDATA="+h.local,
 		"APPDATA="+h.roaming,
 		"TEMP="+h.temp,
