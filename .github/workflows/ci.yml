@@ -149,6 +149,45 @@ jobs:
           DISTRO: ${{ matrix.distro }}
           PODMAN: sudo podman
 
+  # The private config repo sign-in test (test/signin): maisys clones a
+  # private copy of the fixture over HTTPS, with the token in
+  # MAISYS_CONFIG_TOKEN and with the token typed at its prompt. It needs the
+  # repo secret MAISYS_FIXTURE_TOKEN, which pull requests from forks don't
+  # get, so it only runs on pushes to main. Its syncs are dry runs in home
+  # folders of their own, so it runs on the runner itself. Until the secret
+  # and the repo variable MAISYS_FIXTURE_URL are set up, it only says so.
+  signin:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the private fixture repo is set up
+        id: setup
+        env:
+          MAISYS_FIXTURE_URL: ${{ vars.MAISYS_FIXTURE_URL }}
+          MAISYS_FIXTURE_TOKEN: ${{ secrets.MAISYS_FIXTURE_TOKEN }}
+        run: |
+          if [ -n "$MAISYS_FIXTURE_URL" ] && [ -n "$MAISYS_FIXTURE_TOKEN" ]; then
+            echo "ready=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=false" >>"$GITHUB_OUTPUT"
+          echo "::notice title=Sign-in test not run::The private config repo sign-in test needs a private copy of the fixture (go run ./test/cmd/fixture DIR, then push it to a new private repo), the repo variable MAISYS_FIXTURE_URL set to its HTTPS clone URL, and the repo secret MAISYS_FIXTURE_TOKEN set to a fine-grained token with read-only Contents access to that repo alone."
+      # The checkout's token isn't kept, so git can't sign in with it.
+      - uses: actions/checkout@v7
+        if: steps.setup.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        if: steps.setup.outputs.ready == 'true'
+        with:
+          go-version-file: go.mod
+      - name: Sign in to the private fixture repo
+        if: steps.setup.outputs.ready == 'true'
+        run: make signin-test
+        env:
+          MAISYS_FIXTURE_URL: ${{ vars.MAISYS_FIXTURE_URL }}
+          MAISYS_FIXTURE_TOKEN: ${{ secrets.MAISYS_FIXTURE_TOKEN }}
+
   goreleaser:
     runs-on: ubuntu-latest
     steps:
