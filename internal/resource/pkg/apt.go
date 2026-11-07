@@ -45,6 +45,19 @@ func (apt) query(ctx context.Context, m *Manager, names []string) (map[string]in
 	for _, name := range names {
 		infos[name] = dpkgInfo(rows, name)
 	}
+	// Names are checked against current lists: stale ones are refreshed
+	// now if sudo works without a password, as the plan never asks for
+	// one. Otherwise names the old lists don't have are checked when the
+	// lists are refreshed, before installing.
+	stale := m.listsStale()
+	if stale {
+		switch err := m.refresh(ctx); {
+		case err == nil:
+			stale = false
+		case !errors.Is(err, system.ErrNeedsPassword):
+			return nil, err
+		}
+	}
 	if !m.listsDownloaded() {
 		for name, in := range infos {
 			in.known, in.unchecked = in.installed, !in.installed
@@ -63,9 +76,10 @@ func (apt) query(ctx context.Context, m *Manager, names []string) (map[string]in
 		candidate, listed := candidates[name]
 		switch {
 		case !listed:
-			in.known = in.installed
+			in.known, in.unchecked = in.installed, !in.installed && stale
 		case candidate == "" || candidate == "(none)":
 			in.known, in.noCandidate = in.installed, !in.installed
+			in.unchecked = !in.installed && stale
 		default:
 			in.known = true
 			if in.installed && candidate != in.version {
