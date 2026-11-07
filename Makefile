@@ -39,11 +39,15 @@ build: ## Build bin/maisys
 test: ## Run the unit tests
 	go test ./...
 
-# The distro make e2e tests, such as fedora-44, or all of them (test/e2e).
-DISTRO ?= all
+# The distro make e2e tests, such as fedora-44, or all of them; and the
+# scenarios it runs on each, such as drift,legacy, all of them or none
+# (test/e2e). E2E_PARALLEL scenarios run at a time.
+DISTRO       ?= all
+SCENARIO     ?= all
+E2E_PARALLEL ?= 4
 
-e2e: ## Run the end-to-end tests in podman containers: every distro, or DISTRO=fedora-44
-	MAISYS_E2E='$(DISTRO)' go test -count=1 -timeout 3h -v -run '^TestSync$$' ./test/e2e
+e2e: ## Run the end-to-end tests in podman containers: every distro and scenario, or DISTRO=fedora-44 SCENARIO=drift
+	MAISYS_E2E='$(DISTRO)' MAISYS_E2E_SCENARIOS='$(SCENARIO)' go test -count=1 -timeout 3h -v -parallel '$(E2E_PARALLEL)' -run '^TestSync$$' ./test/e2e
 
 # The upgrade test's releases (test/e2e): DRAFT is a folder of the draft
 # release's files, such as dist/ from make snapshot, and PREVIOUS the URL of
