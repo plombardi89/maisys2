@@ -23,8 +23,15 @@ var ErrUnknownKey = errors.New("unknown key")
 // .toml) must match.
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// nameRule describes namePattern.
-const nameRule = "use lower-case letters, digits, '.', '-' and '_'"
+// NameRule describes the names machines and profiles can have.
+const NameRule = "use lower-case letters, digits, '.', '-' and '_'"
+
+// ValidName reports whether name can name a machine or a profile: it's
+// made of lower-case letters, digits, '.', '-' and '_', and starts with a
+// letter or a digit.
+func ValidName(name string) bool {
+	return namePattern.MatchString(name)
+}
 
 // Repo is a config repo.
 type Repo struct {
@@ -47,7 +54,7 @@ var machineKeys = []string{"os", "os_version", "arch", "profiles"}
 // file, not just the first.
 func (r *Repo) LoadMachine(name string) (*Machine, error) {
 	if !namePattern.MatchString(name) {
-		return nil, fmt.Errorf("invalid machine name %q: %s", name, nameRule)
+		return nil, fmt.Errorf("invalid machine name %q: %s", name, NameRule)
 	}
 	schema, err := newSchema(r.Modules)
 	if err != nil {
@@ -83,7 +90,7 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 		at := machineFile.locs.whereItem(machineFile.path, "profiles", p)
 		switch {
 		case !namePattern.MatchString(p):
-			errs = append(errs, fmt.Errorf("%s: invalid profile name %q: %s", at, p, nameRule))
+			errs = append(errs, fmt.Errorf("%s: invalid profile name %q: %s", at, p, NameRule))
 			continue
 		case seen[p]:
 			errs = append(errs, fmt.Errorf("%s: profile %q is listed more than once", at, p))

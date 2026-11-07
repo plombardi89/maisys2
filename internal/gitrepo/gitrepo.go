@@ -279,11 +279,34 @@ func (r *Repo) CommitAll(ctx context.Context, message string) error {
 		return nil
 	}
 	if ge, ok := errors.AsType[*gitError](err); ok && noIdentity(ge.stderr) {
-		return fmt.Errorf(`%w. Set them with:
-  git config --global user.name "Your Name"
-  git config --global user.email "you@example.com"`, ErrNoIdentity)
+		return identityError()
 	}
 	return fmt.Errorf("couldn't commit in %s: %w", r.Dir, err)
+}
+
+// CheckIdentity checks that git knows the name and email address to record
+// in a commit, as CommitAll needs, so a commit can't fail for that after
+// other work is done. It fails with ErrNoIdentity if git doesn't.
+func CheckIdentity(ctx context.Context, opts Options) error {
+	for _, ident := range []string{"GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"} {
+		_, err := opts.run(ctx, call{dir: outsideRepos(), args: []string{"var", ident}})
+		if err == nil {
+			continue
+		}
+		if ge, ok := errors.AsType[*gitError](err); ok && noIdentity(ge.stderr) {
+			return identityError()
+		}
+		return fmt.Errorf("couldn't read git's settings: %w", err)
+	}
+	return nil
+}
+
+// identityError is the error for a commit git can't make, because it
+// doesn't know who's making it.
+func identityError() error {
+	return fmt.Errorf(`%w. Set them with:
+  git config --global user.name "Your Name"
+  git config --global user.email "you@example.com"`, ErrNoIdentity)
 }
 
 // SetRemote sets the URL of the clone's origin, adding origin if it's

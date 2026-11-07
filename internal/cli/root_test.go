@@ -154,7 +154,6 @@ func TestPlaceholderCommands(t *testing.T) {
 		args []string
 		name string
 	}{
-		{[]string{"config", "init", "/tmp/cfg", "--machine", "box", "--remote", "https://example.com/c.git"}, "config init"},
 		{[]string{"status", "-v"}, "status"},
 	}
 	for _, tt := range tests {

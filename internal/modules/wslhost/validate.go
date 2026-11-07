@@ -3,6 +3,7 @@ package wslhost
 import (
 	"io/fs"
 	"maps"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -28,6 +29,38 @@ var (
 
 // imageOS maps the distro part of an image name to the os it installs.
 var imageOS = map[string]config.OS{"FedoraLinux": config.Fedora, "Ubuntu": config.Ubuntu}
+
+// UserRule describes the user names a distro's user can have.
+const UserRule = "with lower-case letters, digits, '_' and '-', starting with a letter or '_', and up to 32 characters"
+
+// ValidUser reports whether name can be a distro's user: a valid Linux user
+// name other than root.
+func ValidUser(name string) bool {
+	return name != "root" && userPattern.MatchString(name)
+}
+
+// HTTPSURL returns the HTTPS URL of the repo at sshURL, a git SSH URL, on
+// hosts that serve repos at the same path over both, as GitHub, GitLab and
+// Bitbucket do: for example https://github.com/owner/repo.git for
+// git@github.com:owner/repo.git. It returns "" if sshURL isn't an SSH URL
+// with a host and a path.
+func HTTPSURL(sshURL string) string {
+	if !isSSH(sshURL) {
+		return ""
+	}
+	var host, repoPath string
+	if prefix := scpURL.FindString(sshURL); prefix != "" {
+		_, host, _ = strings.Cut(strings.TrimSuffix(prefix, ":"), "@")
+		repoPath = sshURL[len(prefix):]
+	} else if u, err := url.Parse(sshURL); err == nil {
+		host, repoPath = u.Hostname(), u.Path
+	}
+	repoPath = strings.TrimPrefix(repoPath, "/")
+	if host == "" || repoPath == "" {
+		return ""
+	}
+	return "https://" + host + "/" + repoPath
+}
 
 // Check checks default_distro, config_url and every distro against the
 // Linux machine it's set up from.
@@ -69,7 +102,7 @@ func checkDistro(check *config.Check, name string, d Distro) {
 	case d.User == "root":
 		check.Errorf(key+".user", "can't be root: set it to the Linux user to create")
 	case !userPattern.MatchString(d.User):
-		check.Errorf(key+".user", "must be a Linux user name, with lower-case letters, digits, '_' and '-', starting with a letter or '_', and up to 32 characters, not %q", d.User)
+		check.Errorf(key+".user", "must be a Linux user name, "+UserRule+", not %q", d.User)
 	default:
 	}
 

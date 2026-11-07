@@ -35,7 +35,7 @@ The subcommands create a new config repo and check an existing one.`,
 	cmd.Flags().BoolVar(&explain, "explain", false, "show which file set each value")
 
 	cmd.AddCommand(
-		newConfigInitCommand(),
+		newConfigInitCommand(g),
 		newConfigValidateCommand(g),
 	)
 	return cmd
@@ -63,18 +63,33 @@ func showConfig(cmd *cobra.Command, g *globalOptions, explain bool) error {
 	return config.Render(out, m, r.Modules, modules.Docs(), explain)
 }
 
-func newConfigInitCommand() *cobra.Command {
-	var machine, remote string
+func newConfigInitCommand(g *globalOptions) *cobra.Command {
+	var opts initOptions
 	cmd := &cobra.Command{
 		Use:   "init [DIR]",
 		Short: "Create a new config repo",
 		Long: `Create a starter config repo in DIR (default ~/maisys-config), with a machine
-file for this machine, and save it as the config for this machine.`,
+file for this machine, commit it with git, and save it as the config for
+this machine. DIR must be empty or not exist yet.
+
+The machine is named after --machine, or else MAISYS_MACHINE, or else the
+hostname. Its machine file declares this system's os and os_version. Every
+module is in the profiles as a commented-out example. On Windows, the
+machine file also creates a WSL distro, set up from a Linux machine file
+that's written too.
+
+With --remote, the repo is pushed to URL, which must already exist: create
+an empty repo for it first.`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				opts.dir = args[0]
+			}
+			return initConfig(cmd, g, opts)
+		},
 	}
-	cmd.Flags().StringVar(&machine, "machine", "", "name of the machine file to create for this machine")
-	cmd.Flags().StringVar(&remote, "remote", "", "set this existing repo as origin and push to it")
+	cmd.Flags().StringVar(&opts.machine, "machine", "", "name of the machine file to create for this machine")
+	cmd.Flags().StringVar(&opts.remote, "remote", "", "set this existing repo as origin and push to it")
 	return cmd
 }
 

@@ -465,6 +465,61 @@ func TestCommitAllWithoutIdentity(t *testing.T) {
 	assertErrorContains(t, err, `git config --global user.name "Your Name"`, `git config --global user.email "you@example.com"`)
 }
 
+func TestCheckIdentity(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(sb *sandbox)
+		wantErr bool
+	}{
+		{name: "from the environment"},
+		{
+			name: "from the global config",
+			setup: func(sb *sandbox) {
+				sb.setGlobal("user.name", "maisys test")
+				sb.setGlobal("user.email", "test@example.com")
+				sb.opts.Env = slices.DeleteFunc(slices.Clone(sb.opts.Env), func(kv string) bool {
+					return strings.HasPrefix(kv, "GIT_AUTHOR_") || strings.HasPrefix(kv, "GIT_COMMITTER_")
+				})
+			},
+		},
+		{
+			name: "unknown",
+			setup: func(sb *sandbox) {
+				sb.setGlobal("user.useConfigOnly", "true")
+				sb.opts.Env = append(slices.Clip(sb.opts.Env), "GIT_AUTHOR_NAME=", "GIT_AUTHOR_EMAIL=", "GIT_COMMITTER_NAME=", "GIT_COMMITTER_EMAIL=", "EMAIL=")
+			},
+			wantErr: true,
+		},
+		{
+			name: "only the author is known",
+			setup: func(sb *sandbox) {
+				sb.setGlobal("user.useConfigOnly", "true")
+				sb.opts.Env = append(slices.Clip(sb.opts.Env), "GIT_COMMITTER_NAME=", "GIT_COMMITTER_EMAIL=", "EMAIL=")
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			if tt.setup != nil {
+				tt.setup(sb)
+			}
+			err := CheckIdentity(t.Context(), sb.opts)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("CheckIdentity() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrNoIdentity) {
+				t.Fatalf("CheckIdentity() error = %v, want ErrNoIdentity", err)
+			}
+			assertErrorContains(t, err, `git config --global user.name "Your Name"`, `git config --global user.email "you@example.com"`)
+		})
+	}
+}
+
 func TestInitBranch(t *testing.T) {
 	tests := []struct {
 		defaultBranch string // init.defaultBranch

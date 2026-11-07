@@ -141,7 +141,7 @@ func (r *Repo) ValidateAll() error {
 
 	var errs []error
 	for _, name := range badMachines {
-		errs = append(errs, fmt.Errorf("%s: invalid machine name %q: %s", MachineFile(name), name, nameRule))
+		errs = append(errs, fmt.Errorf("%s: invalid machine name %q: %s", MachineFile(name), name, NameRule))
 	}
 	if len(machines) == 0 && len(badMachines) == 0 {
 		errs = append(errs, fmt.Errorf("%s/ has no machine files", machinesDir))
@@ -151,7 +151,7 @@ func (r *Repo) ValidateAll() error {
 		errs = append(errs, err)
 	}
 	for _, name := range badProfiles {
-		errs = append(errs, fmt.Errorf("%s: invalid profile name %q: %s", profileFile(name), name, nameRule))
+		errs = append(errs, fmt.Errorf("%s: invalid profile name %q: %s", profileFile(name), name, NameRule))
 	}
 	for _, name := range profiles {
 		file := profileFile(name)
