@@ -28,16 +28,26 @@ GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 BUILDINFO := github.com/plombardi89/maisys2/internal/buildinfo
 LDFLAGS   := -s -w -X $(BUILDINFO).version=$(VERSION) -X $(BUILDINFO).commit=$(COMMIT) -X $(BUILDINFO).date=$(DATE)
 
-.PHONY: help build test lint lint-go lint-shell lint-workflows fmt generate tidy snapshot clean
+.PHONY: help build test e2e fixture lint lint-go lint-shell lint-workflows fmt generate tidy snapshot clean
 
 help: ## Show this help
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
 build: ## Build bin/maisys
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/maisys ./cmd/maisys
 
 test: ## Run the unit tests
 	go test ./...
+
+# The distro make e2e tests, such as fedora-44, or all of them (test/e2e).
+DISTRO ?= all
+
+e2e: ## Run the end-to-end tests in podman containers: every distro, or DISTRO=fedora-44
+	MAISYS_E2E='$(DISTRO)' go test -count=1 -timeout 3h -v -run '^TestSync$$' ./test/e2e
+
+fixture: ## Build the end-to-end tests' fixture config repo in DIR
+	@[ -n '$(DIR)' ] || { echo 'usage: make fixture DIR=folder' >&2; exit 2; }
+	go run ./test/cmd/fixture '$(DIR)'
 
 lint: lint-go lint-shell lint-workflows ## Run every linter
 
