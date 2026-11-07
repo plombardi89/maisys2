@@ -238,12 +238,15 @@ func TestInstall(t *testing.T) {
 			if got := runner.Commands(); !slices.Equal(got, []string{tt.wantCmd}) {
 				t.Errorf("commands = %q, want %q", got, tt.wantCmd)
 			}
-			var reboot interface{ RebootRequired() bool }
-			if got := errors.As(err, &reboot) && reboot.RebootRequired(); got != tt.wantReboot {
-				t.Errorf("Apply() error = %v, want a reboot: %t", err, tt.wantReboot)
-			}
-			if !tt.wantReboot && err != nil {
+			if err != nil {
 				t.Errorf("Apply() error = %v", err)
+			}
+			// A restart isn't a failure: the sync stops for it.
+			if why, needed := i.RebootNeeded(); needed != tt.wantReboot {
+				t.Errorf("RebootNeeded() = %q, %t; want %t", why, needed, tt.wantReboot)
+			}
+			if c.Action == resource.Create && !c.MayReboot {
+				t.Error("installing WSL doesn't say a reboot may be needed")
 			}
 			for _, call := range runner.Calls() {
 				if !slices.Contains(call.Cmd.Env, "WSL_UTF8=1") {

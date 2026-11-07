@@ -38,15 +38,29 @@ var Upstream = version.GitHub{Repo: "microsoft/WSL"}
 //
 // Installing and updating need admin rights. Installing WSL for the first
 // time usually turns on Windows features that only work once Windows
-// restarts: then Apply returns a *RebootError, so the distros that need
-// WSL aren't created until it has.
+// restarts: then the install asks for a restart (see RebootNeeded), so
+// the sync stops with exit code 3, and the distros that need WSL are
+// created by the next sync, after the restart.
 type Install struct {
 	// Latest returns the latest WSL release, such as "2.6.1". Nil means
 	// looking it up in Upstream, cached like tools' latest versions.
 	Latest func(ctx context.Context, rt *resource.Runtime) (string, error)
+
+	// reboot says why Windows must restart after the last Apply, if it
+	// must.
+	reboot string
 }
 
-var _ resource.Resource = (*Install)(nil)
+var (
+	_ resource.Resource     = (*Install)(nil)
+	_ resource.RebootNeeder = (*Install)(nil)
+)
+
+// RebootNeeded reports whether the last Apply installed WSL in a way that
+// only works once Windows restarts.
+func (i *Install) RebootNeeded() (why string, needed bool) {
+	return i.reboot, i.reboot != ""
+}
 
 // ID returns "wsl".
 func (i *Install) ID() string { return Kind }
@@ -68,7 +82,7 @@ func (i *Install) Check(ctx context.Context, rt *resource.Runtime) (resource.Cha
 	}
 	switch {
 	case installed == "":
-		return resource.Change{Action: resource.Create, Summary: "install WSL"}, nil
+		return resource.Change{Action: resource.Create, Summary: "install WSL", MayReboot: true}, nil
 	case lookupErr != nil:
 		return resource.Change{Notes: []string{fmt.Sprintf("couldn't check for a newer WSL: %v", lookupErr)}}, nil
 	case newer(latest, installed):
@@ -92,6 +106,7 @@ func (i *Install) Apply(ctx context.Context, rt *resource.Runtime) (state.Record
 	if err != nil {
 		return state.Record{}, err
 	}
+	i.reboot = ""
 	switch {
 	case installed == "":
 		if _, err := rt.Runner.Run(ctx, command("installing WSL", "--install", "--no-distribution")); err != nil {
@@ -102,7 +117,8 @@ func (i *Install) Apply(ctx context.Context, rt *resource.Runtime) (state.Record
 			return state.Record{}, err
 		}
 		if reboot {
-			return state.Record{}, &RebootError{}
+			i.reboot = "WSL was installed"
+			return state.Record{Details: map[string]string{DetailVersion: "pending a restart"}}, nil
 		}
 		if installed, err = reg.Version(); err != nil {
 			return state.Record{}, err
@@ -172,24 +188,6 @@ func short(v string) string {
 	}
 	return v
 }
-
-// RebootError is the error installing WSL ends with when Windows must
-// restart before WSL works, as it usually must the first time. It fails the
-// wsl_host module, which stops it from creating distros WSL can't run yet.
-//
-// A sync that ends with one should stop as #1 says: save the state, say
-// "reboot, then run maisys sync again", and exit with code 3. The engine
-// will find it with errors.As, or through RebootRequired, which marks
-// every error a restart fixes; until it does, the sync fails with this
-// error's message, which says the same.
-type RebootError struct{}
-
-func (*RebootError) Error() string {
-	return "WSL is installed, but Windows must restart before it works: restart, then run maisys sync again to finish"
-}
-
-// RebootRequired reports that a restart fixes the error.
-func (*RebootError) RebootRequired() bool { return true }
 
 // Remover handles the records of WSL installs once wsl_host is turned off:
 // WSL stays installed, and the record is dropped without a line in the
