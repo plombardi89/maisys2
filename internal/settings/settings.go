@@ -58,11 +58,20 @@ var migrations = map[int]migration{}
 // format, Load migrates it and saves it in the current format, after
 // keeping a copy of the old file next to it as <name>.v<N>.bak.
 func Load(path string) (*Settings, error) {
-	return load(path, FormatVersion, migrations)
+	return load(path, FormatVersion, migrations, true)
 }
 
-// load is Load, for format version current and the migrations in steps.
-func load(path string, current int, steps map[int]migration) (*Settings, error) {
+// Read reads the local settings from path as Load does, but never writes
+// anything: a file in an older format is only migrated in memory. It's for
+// commands that only report, such as status, which don't take the lock and
+// so mustn't replace a file a sync may be saving.
+func Read(path string) (*Settings, error) {
+	return load(path, FormatVersion, migrations, false)
+}
+
+// load is Load, or Read unless save is set, for format version current and
+// the migrations in steps.
+func load(path string, current int, steps map[int]migration, save bool) (*Settings, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s doesn't exist", ErrNoSettings, path)
@@ -84,7 +93,7 @@ func load(path string, current int, steps map[int]migration) (*Settings, error) 
 		return nil, fmt.Errorf("%s was written by a newer version of maisys (format_version %d; this version reads up to %d): update maisys and try again",
 			path, *head.FormatVersion, current)
 	case *head.FormatVersion < current:
-		return migrate(path, data, *head.FormatVersion, current, steps)
+		return migrate(path, data, *head.FormatVersion, current, steps, save)
 	}
 
 	s := &Settings{}
@@ -95,8 +104,9 @@ func load(path string, current int, steps map[int]migration) (*Settings, error) 
 }
 
 // migrate upgrades data, the contents of path, from format version from to
-// current, and saves the result after keeping a copy of the old file.
-func migrate(path string, data []byte, from, current int, steps map[int]migration) (*Settings, error) {
+// current. With save, it saves the result after keeping a copy of the old
+// file.
+func migrate(path string, data []byte, from, current int, steps map[int]migration, save bool) (*Settings, error) {
 	var table map[string]any
 	if err := toml.Unmarshal(data, &table); err != nil {
 		return nil, decodeError(path, err, true)
@@ -119,6 +129,9 @@ func migrate(path string, data []byte, from, current int, steps map[int]migratio
 	if err := decodeStrict(migrated, s); err != nil {
 		// Line numbers would refer to the migrated file, which isn't saved.
 		return nil, decodeError(fmt.Sprintf("%s, migrated to format_version %d", path, current), err, false)
+	}
+	if !save {
+		return s, nil
 	}
 
 	if err := backup(path, data, from); err != nil {
