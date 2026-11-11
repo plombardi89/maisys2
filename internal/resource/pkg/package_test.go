@@ -32,6 +32,8 @@ type testSystem struct {
 	now    time.Time
 	slept  time.Duration
 	notes  strings.Builder
+	// held are the packages fakeApt says are held.
+	held []string
 }
 
 func newTestSystem(t *testing.T, os config.OS) *testSystem {
@@ -359,7 +361,8 @@ func TestCheckHeld(t *testing.T) {
 
 // TestCheckWithoutLists checks a fresh Ubuntu whose package lists were
 // never downloaded, where sudo needs a password: the plan can't refresh
-// them, so names are checked once they're refreshed, before installing.
+// them, so names are checked once they're refreshed, before installing,
+// and the plan says so.
 func TestCheckWithoutLists(t *testing.T) {
 	s := newTestSystem(t, config.Ubuntu)
 	s.runner.SudoStatus = system.SudoNeedsPassword
@@ -371,7 +374,17 @@ func TestCheckWithoutLists(t *testing.T) {
 	if got := s.runner.RootCommands(); len(got) != 0 {
 		t.Errorf("ran %q as root during the plan, though sudo needs a password", got)
 	}
+	if want := []string{missingListsNote}; !slices.Equal(changes[0].Notes, want) {
+		t.Errorf("notes = %q, want %q", changes[0].Notes, want)
+	}
 }
+
+// The notes the plan shows on the first package when it couldn't refresh
+// apt's lists.
+const (
+	staleListsNote   = "apt's package lists are more than an hour old, and the plan couldn't refresh them (upgrades are checked when they're refreshed during apply)"
+	missingListsNote = "apt's package lists haven't been downloaded, and the plan couldn't download them (packages are checked when they're downloaded during apply)"
+)
 
 // TestCheckStaleLists checks package lists more than an hour old, such as
 // a WSL image's: names they don't have aren't typos until the lists are
@@ -457,6 +470,13 @@ func TestCheckStaleLists(t *testing.T) {
 			fresh := !s.m.listsStale()
 			if fresh != tt.refresh {
 				t.Errorf("lists refreshed during the plan: %t, want %t", fresh, tt.refresh)
+			}
+			var wantNotes []string
+			if !tt.refresh {
+				wantNotes = []string{staleListsNote}
+			}
+			if !slices.Equal(changes[0].Notes, wantNotes) {
+				t.Errorf("plan notes = %q, want %q", changes[0].Notes, wantNotes)
 			}
 		})
 	}

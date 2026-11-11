@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -243,10 +244,77 @@ func (m *Manager) refresh(ctx context.Context) error {
 		}
 	}
 	m.listsRefreshed()
+	m.lookupMu.Lock()
+	m.relooked = map[string]info{}
+	m.lookupMu.Unlock()
 	if err != nil {
 		m.notify("couldn't refresh the package lists, so packages are installed from the lists there are: %v", err)
 	}
 	return nil
+}
+
+// missedUpgrades returns the upgrades the plan may have missed for the
+// packages of modules that their checks found up to date, leaving out
+// those in skip: if apply has refreshed apt's lists, they're looked up
+// again, once each, and those with a newer version that aren't held are
+// returned. Otherwise it returns nothing.
+func (m *Manager) missedUpgrades(ctx context.Context, modules, skip []string) ([]string, error) {
+	var names []string
+	m.mu.Lock()
+	for _, name := range m.wanted {
+		if !slices.Contains(skip, name) && slices.ContainsFunc(modules, func(module string) bool { return slices.Contains(m.current[module], name) }) {
+			names = append(names, name)
+		}
+	}
+	m.mu.Unlock()
+
+	m.lookupMu.Lock()
+	defer m.lookupMu.Unlock()
+	if m.relooked == nil || len(names) == 0 {
+		return nil, nil
+	}
+	var unknown []string
+	for _, name := range names {
+		if _, ok := m.relooked[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		infos, err := m.backend.query(ctx, m, unknown)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range unknown {
+			m.relooked[name] = infos[name]
+		}
+	}
+	var more []string
+	for _, name := range names {
+		if in := m.relooked[name]; in.installed && in.newer != "" && !in.held {
+			more = append(more, name)
+		}
+	}
+	return more, nil
+}
+
+// listsNote returns the note the plan shows on the sync's first package, p,
+// if apt's lists were stale and the plan couldn't refresh them, and ""
+// otherwise.
+func (m *Manager) listsNote(p *Package) string {
+	m.mu.Lock()
+	first := m.first == p
+	m.mu.Unlock()
+	m.lookupMu.Lock()
+	stale := m.planStale
+	m.lookupMu.Unlock()
+	switch {
+	case !first || !stale:
+		return ""
+	case !m.listsDownloaded():
+		return "apt's package lists haven't been downloaded, and the plan couldn't download them (packages are checked when they're downloaded during apply)"
+	default:
+		return "apt's package lists are more than an hour old, and the plan couldn't refresh them (upgrades are checked when they're refreshed during apply)"
+	}
 }
 
 // refreshForPlan refreshes apt's stale package lists for the plan, and

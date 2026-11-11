@@ -63,6 +63,13 @@ type Manager struct {
 	// wanted holds the names package sets want, so they're looked up
 	// together.
 	wanted []string
+	// first is the sync's first package, which the plan's note about
+	// apt's lists goes on.
+	first *Package
+	// current holds, by module, the names checks found installed with no
+	// upgrade to make, which are looked up again once apply refreshes
+	// apt's lists (see missedUpgrades).
+	current map[string][]string
 	// sourcesChanged reports whether a package source changed since apt's
 	// lists were last refreshed.
 	sourcesChanged bool
@@ -77,6 +84,9 @@ type Manager struct {
 	// planStale reports whether the plan couldn't refresh apt's stale
 	// lists, so it doesn't try again.
 	planStale bool
+	// relooked holds what looking names up again found since apply last
+	// refreshed apt's lists. It's nil until apply refreshes them.
+	relooked map[string]info
 }
 
 // lookup is what looking a package up found, or why it failed.
@@ -136,6 +146,7 @@ func NewManager(r system.Runner, f *facts.System) (*Manager, error) {
 		lockTimeout: DefaultLockTimeout,
 		lockRetry:   lockRetry,
 		found:       map[string]lookup{},
+		current:     map[string][]string{},
 	}
 	var osName config.OS
 	if f != nil {
@@ -181,13 +192,17 @@ func (m *Manager) String() string {
 	return m.backend.String()
 }
 
-// want notes names a package set wants, so they're looked up together.
-func (m *Manager) want(names ...string) {
+// want notes the packages of a package set, so their names are looked up
+// together.
+func (m *Manager) want(pkgs []*Package) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, name := range names {
-		if !slices.Contains(m.wanted, name) {
-			m.wanted = append(m.wanted, name)
+	for _, p := range pkgs {
+		if m.first == nil {
+			m.first = p
+		}
+		if !slices.Contains(m.wanted, p.name) {
+			m.wanted = append(m.wanted, p.name)
 		}
 	}
 }
@@ -197,6 +212,16 @@ func (m *Manager) wants(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Contains(m.wanted, name)
+}
+
+// isCurrent notes that p's check found it installed, with no upgrade to
+// make.
+func (m *Manager) isCurrent(p *Package) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(m.current[p.module], p.name) {
+		m.current[p.module] = append(m.current[p.module], p.name)
+	}
 }
 
 // checkName checks that name is a package name maisys accepts. apt reads
