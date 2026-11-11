@@ -84,7 +84,8 @@ func (p *Package) Group() string { return Group }
 
 // Check finds whether the package needs installing or upgrading. A name
 // the enabled repos don't have is an error, unless the package may come
-// from something the same sync adds.
+// from something the same sync adds. A package held at its version
+// (apt-mark hold) isn't upgraded: the plan notes that it's held.
 func (p *Package) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	m, err := ManagerFor(rt)
 	if err != nil {
@@ -94,10 +95,12 @@ func (p *Package) Check(ctx context.Context, rt *resource.Runtime) (resource.Cha
 	if err != nil {
 		return resource.Change{}, err
 	}
-	p.upgrade = in.installed && in.newer != ""
+	p.upgrade = in.installed && in.newer != "" && !in.held
 	switch {
 	case p.upgrade:
 		return resource.Change{Action: resource.Update, Summary: fmt.Sprintf("upgrade %s %s → %s", p.name, in.version, in.newer)}, nil
+	case in.held && in.newer != "":
+		return resource.Change{Notes: []string{fmt.Sprintf("%s is held at %s (not upgraded to %s)", p.name, in.version, in.newer)}}, nil
 	case in.installed:
 		return resource.Change{}, nil
 	case in.known || in.unchecked || p.fromPending(ctx, rt):

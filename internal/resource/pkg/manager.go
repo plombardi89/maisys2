@@ -90,6 +90,9 @@ type info struct {
 	version   string
 	// newer is the version installing it would upgrade it to, if any.
 	newer string
+	// held reports whether it's installed and held at its version (apt-mark
+	// hold), so apt won't upgrade it.
+	held bool
 	// known reports whether the enabled repos have it, or it's
 	// installed.
 	known bool

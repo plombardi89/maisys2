@@ -129,12 +129,16 @@ func parseDpkgQuery(out []byte) []dpkgRow {
 }
 
 // dpkgInfo returns whether name, perhaps with an architecture such as
-// "libc6:i386", is installed according to rows, and which version.
+// "libc6:i386", is installed according to rows, which version, and whether
+// it's held.
 func dpkgInfo(rows []dpkgRow, name string) info {
 	pkg, arch, _ := strings.Cut(name, ":")
 	for _, r := range rows {
 		if r.pkg == pkg && (arch == "" || r.arch == arch) && dpkgInstalled(r.status) {
-			return info{installed: true, version: r.version, known: true}
+			// The status starts with the package's selection, which
+			// apt-mark hold sets to "hold".
+			held := strings.HasPrefix(r.status, "hold ")
+			return info{installed: true, version: r.version, known: true, held: held}
 		}
 	}
 	return info{}

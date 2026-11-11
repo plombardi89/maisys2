@@ -317,6 +317,46 @@ func TestCheckArchitectures(t *testing.T) {
 	})
 }
 
+// TestCheckHeld checks packages held with apt-mark hold, which apt won't
+// upgrade: apt-get install would fail, and with it the whole module's
+// packages, on every sync.
+func TestCheckHeld(t *testing.T) {
+	s := ubuntu(t)
+	s.on("dpkg-query -W", result(0, "tmux\tamd64\thold ok installed\t3.4-1build1\n"+
+		"jq\tamd64\thold ok installed\t1.7.1-3ubuntu0.24.04.1\n"+
+		"htop\tamd64\tinstall ok installed\t3.3.0-4build1\n", ""))
+	s.on("apt-cache policy", result(0, "tmux:\n  Installed: 3.4-1build1\n  Candidate: 3.5-1\n"+
+		"jq:\n  Installed: 1.7.1-3ubuntu0.24.04.1\n  Candidate: 1.7.1-3ubuntu0.24.04.1\n"+
+		"htop:\n  Installed: 3.3.0-4build1\n  Candidate: 3.3.0-4ubuntu0.1\n", ""))
+	s.on("apt-get install", result(0, "", ""))
+
+	rs := Set(s.rt, "packages", []string{"tmux", "jq", "htop"})
+	changes, errs := s.check(rs)
+	want := []resource.Change{{}, {}, {Action: resource.Update, Summary: "upgrade htop 3.3.0-4build1 → 3.3.0-4ubuntu0.1"}}
+	wantResults(t, rs, changes, errs, want, []string{"", "", ""})
+	wantNotes := [][]string{{"tmux is held at 3.4-1build1 (not upgraded to 3.5-1)"}, nil, nil}
+	for i, c := range changes {
+		if !slices.Equal(c.Notes, wantNotes[i]) {
+			t.Errorf("%s: notes = %q, want %q", rs[i].ID(), c.Notes, wantNotes[i])
+		}
+	}
+
+	var members []resource.Member
+	for i, c := range changes {
+		if p, ok := rs[i].(*Package); ok && c.Action.Applies() {
+			members = append(members, resource.Member{Module: "packages", Resource: p})
+		}
+	}
+	for i, o := range s.applyGroup(members) {
+		if o.Err != nil {
+			t.Errorf("%s: %v", members[i].Resource.ID(), o.Err)
+		}
+	}
+	if got, want := s.runner.RootCommands(), []string{aptInstall + " htop"}; !slices.Equal(got, want) {
+		t.Errorf("commands run as root = %q, want %q: held packages left alone", got, want)
+	}
+}
+
 // TestCheckWithoutLists checks a fresh Ubuntu, which has never downloaded
 // its package lists: names can't be checked during the plan.
 // TestCheckWithoutLists checks a fresh Ubuntu whose package lists were

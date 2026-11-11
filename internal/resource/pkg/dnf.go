@@ -87,7 +87,9 @@ func (dnf) query(ctx context.Context, m *Manager, names []string) (map[string]in
 
 // upgradeList returns the upgrades dnf check-update lists, by package name
 // and by name.arch, looking them up the first time. m.lookupMu must be
-// held.
+// held. dnf leaves out the upgrades that dnf versionlock or an exclude
+// forbids, as dnf upgrade would, so a locked package is never planned as
+// an upgrade.
 func (m *Manager) upgradeList(ctx context.Context) (map[string]string, error) {
 	if m.upgrades == nil {
 		res, err := m.runner.Run(ctx, system.Cmd{
