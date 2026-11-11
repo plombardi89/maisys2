@@ -229,8 +229,6 @@ var legacyPaths = []string{
 	"~/bin/lnav",
 	"~/bin/protoc",
 	"~/bin/mutagen/",
-	"~/go/bin/mage",
-	"~/go/bin/golangci-lint",
 	"~/include/google/",
 	"~/Apps/idea/",
 	"~/Apps/idea.bak/",
@@ -484,7 +482,10 @@ func switchRepo(s *scene) {
 
 // legacy creates what the Ansible setup left behind, and turns on the
 // legacy module: everything it lists is deleted, except a ~/readme.txt
-// that isn't protoc's; a later ~/readme.txt that is, is deleted too.
+// that isn't protoc's; a later ~/readme.txt that is, is deleted too. The
+// mage and golangci-lint the Ansible setup installed with go install are
+// left alone: ~/go/bin is go install's folder, which the golang module
+// manages.
 func legacy(s *scene) {
 	for _, p := range legacyPaths {
 		user := testUser
@@ -497,9 +498,11 @@ func legacy(s *scene) {
 		}
 		s.writeFile(user, abs, "Left behind by the Ansible setup.\n")
 	}
-	keep := []string{"~/bin/keep", "~/readme.txt"}
+	keep := []string{"~/bin/keep", "~/readme.txt", "~/go/bin/mage", "~/go/bin/golangci-lint"}
+	var unwanted []string
 	for _, p := range keep {
-		s.writeFile(testUser, expand(p), "Not left by the Ansible setup.\n")
+		s.writeFile(testUser, expand(p), "Not for the legacy module to delete.\n")
+		unwanted = append(unwanted, "- "+p)
 	}
 
 	s.setMachine("Clean up after the Ansible setup", legacyConfig)
@@ -509,7 +512,7 @@ func legacy(s *scene) {
 	}
 	out := s.sync("dry run", exitChanges, "--dry-run")
 	s.wantLines("the dry run", out, want...)
-	s.wantNoOutput("the dry run", out, "- ~/readme.txt", "- ~/bin/keep")
+	s.wantNoOutput("the dry run", out, unwanted...)
 	s.apply()
 	s.settled()
 	for _, p := range legacyPaths {
