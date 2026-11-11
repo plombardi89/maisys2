@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"golang.org/x/mod/module"
@@ -259,13 +260,39 @@ func goEnvFile(getenv func(string) string) map[string]string {
 	return settings
 }
 
+// lookupModule is the go.mod of the folder go list runs in. As the main
+// module, it stops go from finding another go.mod in a folder above, whose
+// exclude directives would change the answer, or whose go version would
+// make go want a newer toolchain. Its own go version, 1.21, is the first
+// that toolchains enforce, so none wants a newer one for it, and it
+// requires nothing, so the answer is the version go install …@latest
+// installs.
+const lookupModule = "module maisys.invalid/lookup\n\ngo 1.21\n"
+
+// goListEnv is the environment go list runs with, on top of the user's:
+// module mode outside any workspace, with the toolchain maisys manages, as
+// go install runs. It replaces GOFLAGS, since flags in it such as
+// -mod=vendor, -modfile or -e change what go list answers; an empty
+// GOFLAGS would mean the one go env -w saved, so it's go list's default.
+var goListEnv = []string{"GO111MODULE=on", "GOWORK=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}
+
 // GoList returns a GoModule.Direct that runs "go list -m" with the go
 // command goBin, through r: for each prefix of the package path, from the
 // longest, until one is a module. That looks the module up as go install
 // would, with the user's Go settings and credentials, so it works for
-// private modules too.
+// private modules too. It runs with goListEnv, in a temporary folder
+// holding lookupModule's go.mod, which is deleted afterwards.
 func GoList(r system.Runner, goBin string) func(ctx context.Context, path string) (string, error) {
 	return func(ctx context.Context, pkg string) (string, error) {
+		dir, err := os.MkdirTemp("", "maisys-go-list-")
+		if err != nil {
+			return "", fmt.Errorf("making a folder for go list: %w", err)
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(lookupModule), 0o644); err != nil {
+			return "", fmt.Errorf("making a folder for go list: %w", err)
+		}
+
 		var firstErr error
 		for _, mod := range prefixes(pkg) {
 			if module.CheckPath(mod) != nil {
@@ -274,8 +301,8 @@ func GoList(r system.Runner, goBin string) func(ctx context.Context, path string
 			res, err := r.Run(ctx, system.Cmd{
 				Name:  goBin,
 				Args:  []string{"list", "-m", "-json", mod + "@latest"},
-				Env:   []string{"GO111MODULE=on", "GOWORK=off"},
-				Dir:   os.TempDir(),
+				Env:   slices.Clone(goListEnv),
+				Dir:   dir,
 				Label: "go list -m " + mod + "@latest",
 			})
 			if _, ok := errors.AsType[*system.ExitError](err); ok && ctx.Err() == nil {

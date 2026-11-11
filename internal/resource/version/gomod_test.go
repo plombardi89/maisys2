@@ -1,10 +1,13 @@
 package version
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -325,5 +328,127 @@ func TestGoList(t *testing.T) {
 	}
 	if n := len(missing.Commands()); n != 1 {
 		t.Errorf("lookup() without go ran %d commands, want 1", n)
+	}
+}
+
+func TestGoListRunsInAModuleOfItsOwn(t *testing.T) {
+	r := systemtest.NewFakeRunner(t)
+	var dirs []string
+	r.On("go list -m -json", func(_ context.Context, c system.Cmd) (system.Result, error) {
+		dirs = append(dirs, c.Dir)
+		if data, err := os.ReadFile(filepath.Join(c.Dir, "go.mod")); err != nil || string(data) != "module maisys.invalid/lookup\n\ngo 1.21\n" {
+			t.Errorf("go list ran in %s, whose go.mod holds %q (%v), want maisys's own", c.Dir, data, err)
+		}
+		for _, kv := range []string{"GO111MODULE=on", "GOWORK=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"} {
+			if !slices.Contains(c.Env, kv) {
+				t.Errorf("go list ran with environment %q, want %s", c.Env, kv)
+			}
+		}
+		if c.Args[3] == "corp.example/mod@latest" {
+			return system.Result{Stdout: []byte(`{"Version": "v0.4.0"}`)}, nil
+		}
+		return system.Result{ExitCode: 1}, nil
+	})
+	lookup := GoList(r, "go")
+	for range 2 {
+		if got, err := lookup(t.Context(), "corp.example/mod/cmd/tool"); err != nil || got != "v0.4.0" {
+			t.Fatalf("lookup() = %q, %v, want v0.4.0", got, err)
+		}
+	}
+
+	if len(dirs) != 6 || dirs[0] != dirs[2] || dirs[3] == dirs[0] || dirs[3] != dirs[5] {
+		t.Errorf("go list ran in %q, want one folder for each lookup", dirs)
+	}
+	for _, dir := range dirs {
+		if filepath.Clean(dir) == filepath.Clean(os.TempDir()) {
+			t.Errorf("go list ran in %s, the temporary folder, where any go.mod above it applies", dir)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there after the lookup", dir)
+		}
+	}
+}
+
+// TestGoListWithGo runs the real go list against a module proxy in a
+// folder, with settings that would each change its answer if go list
+// followed them: a go.mod above the temporary folder, GOFLAGS, from the
+// environment or the go env file, and GOTOOLCHAIN.
+func TestGoListWithGo(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go isn't installed")
+	}
+	root := t.TempDir()
+	proxy := filepath.Join(root, "proxy")
+	for _, v := range []string{"v1.0.0", "v1.1.0"} {
+		writeFile(t, filepath.Join(proxy, "example.com", "mod", "@v", v+".info"), `{"Version": "`+v+`", "Time": "2026-10-01T00:00:00Z"}`)
+		writeFile(t, filepath.Join(proxy, "example.com", "mod", "@v", v+".mod"), "module example.com/mod\n\ngo 1.21\n")
+	}
+	writeFile(t, filepath.Join(proxy, "example.com", "mod", "@v", "list"), "v1.0.0\nv1.1.0\n")
+	excludes := filepath.Join(root, "excludes.mod")
+	writeFile(t, excludes, "module stray\n\ngo 1.21\n\nexclude example.com/mod v1.1.0\n")
+	goEnv := filepath.Join(root, "goenv")
+	writeFile(t, goEnv, "GOFLAGS=-mod=vendor\n")
+
+	tests := []struct {
+		name  string
+		above string // the go.mod above the temporary folder
+		env   map[string]string
+		path  string
+	}{
+		{name: "a go.mod above asking for a newer go", above: "module stray\n\ngo 1.999\n"},
+		{name: "a go.mod above excluding the latest version", above: "module stray\n\ngo 1.21\n\nexclude example.com/mod v1.1.0\n"},
+		{name: "GOFLAGS=-mod=vendor", env: map[string]string{"GOFLAGS": "-mod=vendor"}},
+		{name: "GOFLAGS=-modfile", env: map[string]string{"GOFLAGS": "-modfile=" + excludes}},
+		{name: "GOFLAGS=-e", env: map[string]string{"GOFLAGS": "-e"}, path: "example.com/mod/cmd/tool"},
+		{name: "GOFLAGS in the go env file", env: map[string]string{"GOENV": goEnv}},
+		{name: "GOTOOLCHAIN", env: map[string]string{"GOTOOLCHAIN": "go1.999.0"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "above")
+			tmp := filepath.Join(dir, "tmp")
+			if err := os.MkdirAll(tmp, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.above != "" {
+				writeFile(t, filepath.Join(dir, "go.mod"), tt.above)
+			}
+			env := map[string]string{
+				"TMPDIR": tmp, "TMP": tmp, "TEMP": tmp,
+				"GOENV":       "off",
+				"GOFLAGS":     "",
+				"GOTOOLCHAIN": "",
+				"GOPROXY":     "file:///" + strings.TrimPrefix(filepath.ToSlash(proxy), "/"),
+				"GOPRIVATE":   "",
+				"GONOPROXY":   "",
+				"GOSUMDB":     "off",
+				"GOMODCACHE":  filepath.Join(root, "modcache"),
+				"GOPATH":      filepath.Join(root, "gopath"),
+				"GOCACHE":     filepath.Join(root, "gocache"),
+			}
+			maps.Copy(env, tt.env)
+			for key, value := range env {
+				t.Setenv(key, value)
+			}
+
+			got, err := GoList(system.NewRunner(system.Options{}), goBin)(t.Context(), cmp.Or(tt.path, "example.com/mod"))
+			if err != nil || got != "v1.1.0" {
+				t.Errorf("lookup() = %q, %v, want v1.1.0", got, err)
+			}
+			if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+				t.Errorf("the temporary folder holds %v after the lookup, want nothing", entries)
+			}
+		})
+	}
+}
+
+func writeFile(t *testing.T, name, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
