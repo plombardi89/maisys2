@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,7 +15,8 @@ const (
 	profilesDir = "profiles"
 )
 
-// ErrUnknownKey is wrapped by errors about keys no module defines.
+// ErrUnknownKey is wrapped by errors about keys no module defines, which
+// are only errors if Repo.Strict is set.
 var ErrUnknownKey = errors.New("unknown key")
 
 // namePattern is what machine and profile names (their file names without
@@ -44,6 +44,12 @@ type Repo struct {
 	// repo. ValidateAll doesn't, because other machines may clone the repo
 	// from another URL.
 	URL string
+	// Strict makes unknown keys errors: keys no module or file has, in
+	// config files and maisys.toml, including keys that only differ from
+	// a known one in case. Otherwise they're ignored, so a config written
+	// for a newer maisys, or one that still sets a key a later
+	// config_version removed, still loads. maisys config validate sets it.
+	Strict bool
 }
 
 // machineKeys are the keys a machine file has besides module tables.
@@ -165,26 +171,44 @@ func (r *Repo) readLayer(file string, typ reflect.Type) (*layer, error) {
 		return nil, err
 	}
 	v := reflect.New(typ)
-	present, err := decodeStrict(file, data, v)
+	present, err := decode(file, data, v, r.Strict)
 	if err != nil {
 		return nil, err
 	}
 	return &layer{path: file, value: v.Elem(), present: present, locs: locate(data)}, nil
 }
 
-// decodeStrict decodes data, read from file, into ptr, a pointer to a
-// struct. Keys the struct has no field for are errors, including keys that
-// only differ from a field's in case. It returns the keys data sets.
-func decodeStrict(file string, data []byte, ptr reflect.Value) (map[string]any, error) {
+// decode decodes data, read from file, into ptr, a pointer to a new
+// struct, and returns the keys data sets. Keys the struct has no field
+// for, including keys that only differ from a field's in case, are errors
+// if strict is set. Otherwise they're ignored: they're left out of both
+// the struct and the keys returned.
+func decode(file string, data []byte, ptr reflect.Value, strict bool) (map[string]any, error) {
 	typ := ptr.Type().Elem()
-	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(ptr.Interface()); err != nil {
-		return nil, decodeError(file, typ, err)
-	}
 	var present map[string]any
 	if err := toml.Unmarshal(data, &present); err != nil {
-		return nil, decodeError(file, typ, err)
+		return nil, decodeError(file, typ, err, nil)
 	}
-	if unknown := unknownKeys(typ, present, nil); len(unknown) > 0 {
+	unknown := unknownKeys(typ, present, nil)
+	doc, locs := data, (*locations)(nil)
+	if !strict && len(unknown) > 0 {
+		// go-toml matches keys to fields without regard to case, so the
+		// ignored keys are removed before decoding, or "Version" would set
+		// version.
+		for _, u := range unknown {
+			prune(present, u.path)
+		}
+		pruned, err := toml.Marshal(present)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		doc, locs = pruned, locate(data)
+		unknown = nil
+	}
+	if err := toml.Unmarshal(doc, ptr.Interface()); err != nil {
+		return nil, decodeError(file, typ, err, locs)
+	}
+	if len(unknown) > 0 {
 		return nil, unknownKeyErrors(file, data, unknown)
 	}
 	return present, nil

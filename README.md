@@ -28,7 +28,7 @@ maisys config init
 This creates `~/maisys-config` with a machine file for this machine and every module listed, commented out, in `profiles/base.toml`. Then:
 
 - `maisys config` shows this machine's merged config, and `maisys config --explain` shows which file set each value.
-- `maisys config validate` checks it, and `maisys config validate --all` checks every machine (the repo's own CI runs this).
+- `maisys config validate` checks it, and `maisys config validate --all` checks every machine (the repo's own CI runs this). They also report keys maisys doesn't know, such as typos, which other commands ignore so that a config written for a newer maisys still works.
 - `maisys sync CONFIG-URL` sets up another machine from the same repo once it's pushed somewhere git can reach. For a private repo over HTTPS, maisys uses git's own sign-in, asks for a read-only token if git can't sign in, or uses `MAISYS_CONFIG_TOKEN`.
 
 The modules and their settings are described in [docs/modules.md](docs/modules.md). Editors that understand JSON schemas for TOML can complete and check config files with `config.schema.json`, which is published with each release.

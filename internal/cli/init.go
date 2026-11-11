@@ -257,7 +257,7 @@ func checkScaffold(files map[string]string, machine, url string) error {
 	for name, data := range files {
 		fsys[name] = &fstest.MapFile{Data: []byte(data), Mode: 0o644}
 	}
-	r := &config.Repo{FS: fsys, Modules: modules.All(), URL: url}
+	r := &config.Repo{FS: fsys, Modules: modules.All(), URL: url, Strict: true}
 	_, err := r.Validate(machine)
 	if err == nil {
 		_, err = r.ValidateAll()

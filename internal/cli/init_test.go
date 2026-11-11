@@ -248,7 +248,7 @@ func TestConfigInit(t *testing.T) {
 				}
 			}
 
-			repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All()}
+			repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), Strict: true}
 			if _, err := repo.ValidateAll(); err != nil {
 				t.Errorf("the starter config isn't valid:\n%v", err)
 			}
@@ -598,7 +598,7 @@ func TestConfigInitWindowsSSHRemote(t *testing.T) {
 	if want := "\nconfig_url = \"https://example.invalid/phil/config.git\"\n"; !strings.Contains(string(data), want) {
 		t.Errorf("the machine file doesn't contain %q:\n%s", want, data)
 	}
-	repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: "git@example.invalid:phil/config.git"}
+	repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: "git@example.invalid:phil/config.git", Strict: true}
 	if _, err := repo.ValidateAll(); err != nil {
 		t.Errorf("the starter config isn't valid:\n%v", err)
 	}
@@ -691,7 +691,7 @@ func TestConfigInitExamples(t *testing.T) {
 			}
 		}
 		machine := "os = \"" + string(tt.os) + "\"\n\n" + strings.Join(examples, "\n\n") + "\n"
-		r := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: modules.All()}
+		r := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: modules.All(), Strict: true}
 		if _, err := r.LoadMachine("box"); err != nil {
 			t.Errorf("profiles/%s.toml: the examples don't load:\n%v", tt.profile, err)
 		}
@@ -723,7 +723,7 @@ func TestConfigInitExamples(t *testing.T) {
 		t.Fatal("profiles/base.toml has no golang example")
 	}
 	writeFiles(t, dir, map[string]string{"profiles/base.toml": strings.Join(blocks, "\n\n")})
-	repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All()}
+	repo := &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), Strict: true}
 	if _, err := repo.ValidateAll(); err != nil {
 		t.Fatalf("the config with golang turned on isn't valid:\n%v", err)
 	}

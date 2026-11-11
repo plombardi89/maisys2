@@ -939,13 +939,6 @@ version = "1.27"
 				"maisys: 1 problem found\n",
 		},
 		{
-			name:  "an unknown key",
-			files: map[string]string{"machines/" + fc44 + ".toml": "os = \"fedora\"\ncolour = \"blue\"\n"},
-			stderr: "machines/" + fc44 + ".toml:2:1: unknown key colour\n" +
-				"maisys: 1 problem found\n" +
-				"maisys: an unknown key may mean the config needs a newer maisys than this one (dev)\n",
-		},
-		{
 			name:   "a newer config_version",
 			files:  map[string]string{"maisys.toml": "config_version = 2\n"},
 			stderr: "maisys.toml:1:18: config_version 2 needs a newer maisys: this one reads config_version 1; update maisys\nmaisys: 1 problem found\n",
@@ -967,6 +960,37 @@ version = "1.27"
 				t.Errorf("stdout = %q, want nothing", stdout)
 			}
 		})
+	}
+}
+
+// TestSyncIgnoresUnknownKeys checks that keys this maisys doesn't know,
+// which a config written for a newer one may have, don't stop a sync.
+func TestSyncIgnoresUnknownKeys(t *testing.T) {
+	e := newTestEnv(t)
+	e.useGit()
+	remote := e.newRemote()
+	clone := e.setUp(remote)
+	// The same config, with keys added that this maisys doesn't know.
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(clone, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	machine := "machines/" + fc44 + ".toml"
+	e.pushUpstream(remote, map[string]string{
+		"maisys.toml": read("maisys.toml") + "mirror = \"https://example.com\"\n",
+		machine:       "colour = \"blue\"\n" + read(machine) + "\n[newer_module]\nenabled = true\n",
+	})
+
+	code, stdout, stderr := e.run("sync")
+	wantSynced(t, code, stderr)
+	if strings.Contains(stderr, "unknown key") {
+		t.Errorf("stderr reports an unknown key:\n%s", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing", stdout)
 	}
 }
 

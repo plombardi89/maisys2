@@ -78,7 +78,8 @@ type ModuleInfo struct {
 //
 // A field tagged deprecated:"<what to use instead>" still works, but every
 // file that sets it gets a warning (see Machine.Warnings), and the docs say
-// so. Deprecated keys are removed only with a new config_version.
+// so. Deprecated keys are removed only with a new config_version; after
+// that, they're unknown keys (see Repo.Strict).
 type ModuleConfig interface {
 	IsEnabled() bool
 }

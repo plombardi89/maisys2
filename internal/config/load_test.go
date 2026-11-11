@@ -3,6 +3,7 @@ package config_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -67,6 +68,13 @@ var testModules = []config.Module{
 func load(t *testing.T, files fstest.MapFS, machine string) (*config.Machine, error) {
 	t.Helper()
 	repo := &config.Repo{FS: files, Modules: testModules}
+	return repo.LoadMachine(machine)
+}
+
+// loadStrict is load with unknown keys as errors.
+func loadStrict(t *testing.T, files fstest.MapFS, machine string) (*config.Machine, error) {
+	t.Helper()
+	repo := &config.Repo{FS: files, Modules: testModules, Strict: true}
 	return repo.LoadMachine(machine)
 }
 
@@ -509,7 +517,7 @@ Source = "files/nvim/"
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := load(t, tt.files, tt.machine)
+			_, err := loadStrict(t, tt.files, tt.machine)
 			if err == nil {
 				t.Fatal("LoadMachine succeeded, want an error")
 			}
@@ -527,10 +535,141 @@ func TestUnknownKeyErrorsAreMarked(t *testing.T) {
 		"[golang]\nversions = \"1\"\n", // unknown to go-toml
 		"[golang]\nVersion = \"1\"\n",  // only differs in case
 	} {
-		_, err := load(t, fstest.MapFS{"machines/box.toml": file(doc)}, "box")
+		_, err := loadStrict(t, fstest.MapFS{"machines/box.toml": file(doc)}, "box")
 		if !errors.Is(err, config.ErrUnknownKey) {
 			t.Errorf("errors.Is(err, ErrUnknownKey) = false for %v", err)
 		}
+	}
+}
+
+// listsConfig has a list of tables, and a table of tables keyed by name.
+type listsConfig struct {
+	config.Toggle
+	Steps []step          `toml:"steps"`
+	Named map[string]step `toml:"named"`
+}
+
+type step struct {
+	Name string   `toml:"name"`
+	Args []string `toml:"args"`
+}
+
+func TestUnknownKeysAreIgnored(t *testing.T) {
+	repo := &config.Repo{
+		FS: fstest.MapFS{
+			// Keys that only differ in case come after the right ones, so
+			// they'd replace their values if they weren't left out.
+			"machines/box.toml": file(`
+os = "fedora"
+OS = "ubuntu"
+colour = "blue"
+profiles = ["base"]
+
+[golang]
+enabled = true
+version = "1.26.4"
+Version = "1.2"
+versions = { a = 1 }
+
+[[lists.steps]]
+name = "a"
+Name = "b"
+retries = 3
+
+[[lists.steps]]
+args = ["-x"]
+ARGS = ["-y"]
+
+[lists.named.one]
+name = "one"
+NAME = "uno"
+extra = { deep = true }
+
+[newer_module]
+enabled = true
+`),
+			"profiles/base.toml": file(`
+OS = "ubuntu"
+arch_list = ["amd64"]
+
+[files.items.nvim]
+source = "files/nvim/"
+Source = "files/vim/"
+Enabled = false
+
+[files.Items.other]
+source = "files/other"
+`),
+		},
+		Modules: append(slices.Clone(testModules), testModule("lists", func() config.ModuleConfig { return &listsConfig{} })),
+	}
+	m, err := repo.LoadMachine("box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.OS != config.Fedora || m.ProfileOS["base"] != "" {
+		t.Errorf("os = %q, profile os = %q, want fedora and none", m.OS, m.ProfileOS["base"])
+	}
+	if g := golang(m); !g.Enabled || g.Version != "1.26.4" {
+		t.Errorf("golang = %+v, want it on, at version 1.26.4", g)
+	}
+	wantItems := map[string]fileItem{"nvim": {Enabled: true, Source: "files/nvim/"}}
+	if got := files(m).Items; !reflect.DeepEqual(got, wantItems) {
+		t.Errorf("files.items = %+v, want %+v", got, wantItems)
+	}
+	lists, _ := m.Modules["lists"].(*listsConfig)
+	wantSteps := []step{{Name: "a"}, {Args: []string{"-x"}}}
+	if lists == nil || !reflect.DeepEqual(lists.Steps, wantSteps) || !reflect.DeepEqual(lists.Named, map[string]step{"one": {Name: "one"}}) {
+		t.Errorf("lists = %+v, want steps %+v and named.one with name one", lists, wantSteps)
+	}
+	for key := range m.Origins {
+		if strings.Contains(strings.ToLower(key), "newer") || strings.ContainsAny(key, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+			t.Errorf("Origins has %q, which the files only set with an unknown key", key)
+		}
+	}
+	if len(m.Warnings) > 0 {
+		t.Errorf("Warnings = %q, want none", m.Warnings)
+	}
+
+	// The same files, read strictly.
+	repo.Strict = true
+	_, err = repo.LoadMachine("box")
+	if !errors.Is(err, config.ErrUnknownKey) {
+		t.Fatalf("strict LoadMachine = %v, want unknown key errors", err)
+	}
+	want := []string{
+		"machines/box.toml:2:1: unknown key OS (keys are case-sensitive: did you mean os?)",
+		"machines/box.toml:3:1: unknown key colour",
+		"machines/box.toml:9:1: unknown key golang.Version (keys are case-sensitive: did you mean golang.version?)",
+		"machines/box.toml:10:1: unknown key golang.versions",
+		"machines/box.toml:14:1: unknown key lists.steps.Name (keys are case-sensitive: did you mean lists.steps.name?)",
+		"machines/box.toml:15:1: unknown key lists.steps.retries",
+		"machines/box.toml:19:1: unknown key lists.steps.ARGS (keys are case-sensitive: did you mean lists.steps.args?)",
+		"machines/box.toml:23:1: unknown key lists.named.one.NAME (keys are case-sensitive: did you mean lists.named.one.name?)",
+		"machines/box.toml:24:1: unknown key lists.named.one.extra",
+		"machines/box.toml:26:2: unknown key newer_module",
+	}
+	if got := strings.Split(err.Error(), "\n"); !slices.Equal(got, want) {
+		t.Errorf("errors:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestIgnoredKeysKeepPositions checks that a problem in a file whose
+// unknown keys are ignored points at the file, not at the copy of it the
+// loader decodes without them.
+func TestIgnoredKeysKeepPositions(t *testing.T) {
+	_, err := load(t, fstest.MapFS{"machines/box.toml": file(`
+colour = "blue"
+
+[golang]
+Version = 1
+versions = "1.27"
+tools = ["task"]
+flags = "-x"
+`)}, "box")
+	want := "machines/box.toml:7:9: golang.flags must be a list of strings, not a TOML string"
+	if err == nil || err.Error() != want {
+		t.Errorf("LoadMachine = %v, want %s", err, want)
 	}
 }
 

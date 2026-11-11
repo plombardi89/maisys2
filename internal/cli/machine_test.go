@@ -25,7 +25,7 @@ var machineFiles = map[string]string{
 	"machines/fedora-arm.toml": "os = \"fedora\"\narch = \"arm64\"\n",
 	"machines/ubuntu-a.toml":   "os = \"ubuntu\"\n",
 	"machines/win.toml":        "os = \"windows\"\n",
-	"machines/broken.toml":     "os = \"fedora\"\ncolour = \"blue\"\n",
+	"machines/broken.toml":     "os = \"fedora\"\nprofiles = [\"missing\"]\n",
 	"machines/-odd.toml":       "os = \"fedora\"\n", // not a valid machine name
 }
 

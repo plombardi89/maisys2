@@ -123,7 +123,7 @@ func render(t *testing.T, m *config.Machine, explain bool) string {
 
 func loadRenderBox(t *testing.T) *config.Machine {
 	t.Helper()
-	m, err := (&config.Repo{FS: renderFiles, Modules: renderModules}).LoadMachine("box")
+	m, err := (&config.Repo{FS: renderFiles, Modules: renderModules, Strict: true}).LoadMachine("box")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ enabled = true
 	// enabled module.
 	files := fstest.MapFS{"machines/again.toml": {Data: []byte(got)}}
 	maps.Copy(files, renderFiles)
-	again, err := (&config.Repo{FS: files, Modules: renderModules}).LoadMachine("again")
+	again, err := (&config.Repo{FS: files, Modules: renderModules, Strict: true}).LoadMachine("again")
 	if err != nil {
 		t.Fatalf("loading the output: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestExampleTOMLLoads(t *testing.T) {
 			}
 
 			machine := "os = \"" + string(info.OS[0]) + "\"\n" + uncomment(example)
-			repo := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: renderModules}
+			repo := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: renderModules, Strict: true}
 			m, err := repo.LoadMachine("box")
 			if err != nil {
 				t.Fatalf("loading the example:\n%s\n%v", machine, err)

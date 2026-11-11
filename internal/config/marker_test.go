@@ -28,12 +28,31 @@ requires = ">= 0.6"        # optional minimum maisys version
 	}
 }
 
+func TestReadMarkerIgnoresUnknownKeys(t *testing.T) {
+	repo := &config.Repo{FS: fstest.MapFS{"maisys.toml": file(`
+config_version = 1
+Requires = ">= 99"
+mirror = "https://example.com"
+
+[newer]
+key = 1
+`)}}
+	mk, err := repo.ReadMarker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mk.ConfigVersion != 1 || mk.Requires != "" {
+		t.Errorf("marker = %+v, want config_version 1, and no requires", mk)
+	}
+}
+
 func TestReadMarkerErrors(t *testing.T) {
 	tests := []struct {
-		name  string
-		files fstest.MapFS
-		want  string
-		is    error
+		name   string
+		files  fstest.MapFS
+		strict bool
+		want   string
+		is     error
 	}{
 		{
 			name:  "no maisys.toml",
@@ -42,16 +61,23 @@ func TestReadMarkerErrors(t *testing.T) {
 			is:    config.ErrNotConfigRepo,
 		},
 		{
-			name:  "unknown key",
-			files: fstest.MapFS{"maisys.toml": file("config_version = 1\nrequire = \">= 0.6\"\n")},
-			want:  "maisys.toml:2:1: unknown key require",
-			is:    config.ErrUnknownKey,
+			name:   "unknown key",
+			files:  fstest.MapFS{"maisys.toml": file("config_version = 1\nrequire = \">= 0.6\"\n")},
+			strict: true,
+			want:   "maisys.toml:2:1: unknown key require",
+			is:     config.ErrUnknownKey,
 		},
 		{
-			name:  "a key in the wrong case",
+			name:   "a key in the wrong case",
+			files:  fstest.MapFS{"maisys.toml": file("Config_Version = 1\n")},
+			strict: true,
+			want:   "maisys.toml:1:1: unknown key Config_Version (keys are case-sensitive: did you mean config_version?)",
+			is:     config.ErrUnknownKey,
+		},
+		{
+			name:  "a key in the wrong case, ignored",
 			files: fstest.MapFS{"maisys.toml": file("Config_Version = 1\n")},
-			want:  "maisys.toml:1:1: unknown key Config_Version (keys are case-sensitive: did you mean config_version?)",
-			is:    config.ErrUnknownKey,
+			want:  "maisys.toml: config_version is missing: set it to 1",
 		},
 		{
 			name:  "a string where a number is expected",
@@ -66,7 +92,7 @@ func TestReadMarkerErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (&config.Repo{FS: tt.files}).ReadMarker()
+			_, err := (&config.Repo{FS: tt.files, Strict: tt.strict}).ReadMarker()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want one containing %q", err, tt.want)
 			}

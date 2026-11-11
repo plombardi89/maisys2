@@ -33,8 +33,9 @@ type configRepo struct {
 // changing anything: the working directory or the closest folder above it
 // that has a maisys.toml, or else the repo_dir in the local settings. It
 // reads the repo's maisys.toml, prints its warnings, and fails if this
-// maisys can't read the config.
-func (g *globalOptions) openRepo(cmd *cobra.Command) (*configRepo, error) {
+// maisys can't read the config. With strict, unknown keys in the config
+// are errors (see config.Repo.Strict).
+func (g *globalOptions) openRepo(cmd *cobra.Command, strict bool) (*configRepo, error) {
 	errOut := cmd.ErrOrStderr()
 
 	paths, pathsErr := settings.DefaultPaths(g.goos, g.getenv)
@@ -81,13 +82,15 @@ func (g *globalOptions) openRepo(cmd *cobra.Command) (*configRepo, error) {
 
 	r.dir = dir
 	r.Repo = newRepo(dir, url)
+	r.Strict = strict
 	if err := r.checkMarker(errOut, nil); err != nil {
 		return nil, notConfigRepo(err, dir)
 	}
 	return r, nil
 }
 
-// newRepo returns the config repo in dir, whose URL is url.
+// newRepo returns the config repo in dir, whose URL is url. Unknown keys
+// in it are ignored.
 func newRepo(dir, url string) *config.Repo {
 	return &config.Repo{FS: os.DirFS(dir), Modules: modules.All(), URL: url}
 }

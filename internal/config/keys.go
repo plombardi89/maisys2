@@ -23,9 +23,8 @@ type unknownKey struct {
 }
 
 // unknownKeys compares the keys a file sets (present) with the fields of
-// typ, by exact name. go-toml's strict decoding matches names without
-// regard to case, so it accepts "Version" for "version", but merging only
-// sees exact names and would quietly drop it.
+// typ, by exact name. go-toml matches names without regard to case, so it
+// decodes "Version" into version, but merging only sees exact names.
 func unknownKeys(typ reflect.Type, present map[string]any, prefix []string) []unknownKey {
 	typ = deref(typ)
 	var unknown []unknownKey
@@ -79,6 +78,25 @@ func unknownNested(t reflect.Type, value any, path []string) []unknownKey {
 	default:
 	}
 	return nil
+}
+
+// prune removes the key at path from the table present. Paths run through
+// tables, tables keyed by name and lists of tables, but have no indexes
+// for lists: the key is removed from every table in the list.
+func prune(present any, path []string) {
+	switch v := present.(type) {
+	case map[string]any:
+		if len(path) == 1 {
+			delete(v, path[0])
+			return
+		}
+		prune(v[path[0]], path[1:])
+	case []any:
+		for _, item := range v {
+			prune(item, path)
+		}
+	default:
+	}
 }
 
 // unknownKeyErrors describes unknown keys as errors that start with
@@ -165,19 +183,17 @@ func keyPositions(data []byte) map[string]unstable.Position {
 var typeMismatch = regexp.MustCompile(`(?s)^cannot decode TOML (\w+) into `)
 
 // decodeError turns a TOML error into errors that start with
-// file:line:column. typ is the struct the file was decoded into.
-func decodeError(file string, typ reflect.Type, err error) error {
-	if strict, ok := errors.AsType[*toml.StrictMissingError](err); ok {
-		errs := make([]error, 0, len(strict.Errors))
-		for i := range strict.Errors {
-			e := &strict.Errors[i]
-			row, col := e.Position()
-			errs = append(errs, fmt.Errorf("%s:%d:%d: %w %s", file, row, col, ErrUnknownKey, displayKey(e.Key())))
-		}
-		return errors.Join(errs...)
-	}
+// file:line:column. typ is the struct the file was decoded into. If the
+// error comes from a copy of the file without the keys it ignores, locs is
+// where the file itself sets each value, which the error points at
+// instead.
+func decodeError(file string, typ reflect.Type, err error, locs *locations) error {
 	if de, ok := errors.AsType[*toml.DecodeError](err); ok {
 		row, col := de.Position()
+		at := fmt.Sprintf("%s:%d:%d", file, row, col)
+		if locs != nil {
+			at = locs.where(file, displayKey(de.Key()))
+		}
 		msg := strings.TrimPrefix(de.Error(), "toml: ")
 		// go-toml describes type mismatches in Go terms; describe them in
 		// config terms instead.
@@ -186,7 +202,7 @@ func decodeError(file string, typ reflect.Type, err error) error {
 				msg = fmt.Sprintf("%s must be %s, not a TOML %s", displayKey(de.Key()), describeType(t), m[1])
 			}
 		}
-		return fmt.Errorf("%s:%d:%d: %s", file, row, col, msg)
+		return fmt.Errorf("%s: %s", at, msg)
 	}
 	return fmt.Errorf("%s: %w", file, err)
 }

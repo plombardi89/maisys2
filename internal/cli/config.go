@@ -45,7 +45,7 @@ The subcommands create a new config repo and check an existing one.`,
 // showConfig writes this machine's merged config as TOML, after a comment
 // that says which machine and config repo it comes from.
 func showConfig(cmd *cobra.Command, g *globalOptions, explain bool) error {
-	r, err := g.openRepo(cmd)
+	r, err := g.openRepo(cmd, false)
 	if err != nil {
 		return err
 	}
@@ -103,6 +103,9 @@ func newConfigValidateCommand(g *globalOptions) *cobra.Command {
 and every profile. Each problem is printed with the file, line and column
 it's at. The exit code is 1 if there are any.
 
+Keys maisys doesn't know are errors here, though other commands ignore
+them, so that a config written for a newer maisys still works.
+
 ` + findingTheConfig + `
 
 With --all, every machine is checked, so none is chosen.`,
@@ -116,10 +119,11 @@ With --all, every machine is checked, so none is chosen.`,
 }
 
 // validateConfig checks this machine's config, or with all, every
-// machine's. It prints each problem on its own line.
+// machine's, reporting unknown keys too. It prints each problem on its own
+// line.
 func validateConfig(cmd *cobra.Command, g *globalOptions, all bool) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
-	r, err := g.openRepo(cmd)
+	r, err := g.openRepo(cmd, true)
 	if err != nil {
 		return err
 	}

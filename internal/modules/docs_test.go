@@ -62,7 +62,7 @@ func TestExampleTOML(t *testing.T) {
 		info := mod.Info()
 		t.Run(info.Name, func(t *testing.T) {
 			machine := "os = \"" + string(info.OS[0]) + "\"\n" + uncomment(config.ExampleTOML(mod, modules.Docs()))
-			repo := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: modules.All()}
+			repo := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: modules.All(), Strict: true}
 			m, err := repo.LoadMachine("box")
 			if err != nil {
 				t.Fatalf("loading the example:\n%s\n%v", machine, err)
@@ -93,7 +93,7 @@ func TestExamplesTogether(t *testing.T) {
 				}
 			}
 			machine := strings.Join(examples, "\n")
-			repo := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: modules.All()}
+			repo := &config.Repo{FS: fstest.MapFS{"machines/box.toml": {Data: []byte(machine)}}, Modules: modules.All(), Strict: true}
 			if _, err := repo.LoadMachine("box"); err != nil {
 				t.Fatalf("loading the examples:\n%s\n%v", machine, err)
 			}
@@ -104,7 +104,7 @@ func TestExamplesTogether(t *testing.T) {
 // TestRenderExample renders the example machines, and checks that the
 // output is valid TOML holding each enabled module's merged config.
 func TestRenderExample(t *testing.T) {
-	repo := &config.Repo{FS: os.DirFS("testdata/example"), Modules: modules.All()}
+	repo := &config.Repo{FS: os.DirFS("testdata/example"), Modules: modules.All(), Strict: true}
 	for _, name := range []string{"phil-workp14s", "workbox-camwin-fc44", "workbox-camwin"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := repo.LoadMachine(name)

@@ -288,11 +288,10 @@ func TestConfigFailures(t *testing.T) {
 		{
 			name:  "a machine that doesn't load",
 			env:   "box",
-			files: map[string]string{"machines/box.toml": "os = \"fedora\"\nprofiles = [\"base\", \"nope\"]\ncolour = \"blue\"\n"},
+			files: map[string]string{"machines/box.toml": "os = \"fedora\"\nprofiles = [\"base\", \"nope\"]\ncolour = \"blue\"\n\n[golang]\nversion = 1.27\n"},
 			stderr: []string{
-				"machines/box.toml:3:1: unknown key colour\n" +
-					"maisys: 1 problem found\n" +
-					"maisys: an unknown key may mean the config needs a newer maisys than this one (dev)\n",
+				"machines/box.toml:6:11: golang.version must be a string in quotes, not a TOML float\n" +
+					"maisys: 1 problem found\n",
 			},
 		},
 		{
@@ -321,6 +320,65 @@ func TestConfigFailures(t *testing.T) {
 				t.Errorf("stdout = %q, want nothing", stdout)
 			}
 		})
+	}
+}
+
+// TestUnknownKeys checks that only config validate reports unknown keys:
+// config and sync ignore them, so a config written for a newer maisys
+// still works.
+func TestUnknownKeys(t *testing.T) {
+	files := map[string]string{
+		"maisys.toml": "config_version = 1\nmirror = \"https://example.com\"\n",
+		"machines/box.toml": `os = "ubuntu"
+profiles = ["base"]
+colour = "blue"
+
+[golang]
+enabled = true
+Version = "1.26.4"
+versions = ["1.27.0"]
+
+[newer_module]
+enabled = true
+`,
+	}
+	e := newTestEnv(t)
+	e.wd = exampleRepo(t, files)
+	e.vars[machineEnv] = "box"
+
+	code, stdout, stderr := e.run("config")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("config: exit code = %d, stderr:\n%s\nwant %d, and nothing on stderr", code, stderr, exitOK)
+	}
+	for _, unwanted := range []string{"colour", "Version", "versions", "1.26.4", "newer_module", "mirror"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("config output contains %q:\n%s", unwanted, stdout)
+		}
+	}
+	if !strings.Contains(stdout, "\n[golang]\nenabled = true\nversion = \"latest\"\n") {
+		t.Errorf("config output doesn't turn golang on at its default version:\n%s", stdout)
+	}
+
+	want := "maisys.toml:2:1: unknown key mirror\n" +
+		"maisys: 1 problem found\n" +
+		"maisys: an unknown key may mean the config needs a newer maisys than this one (dev)\n"
+	for _, args := range [][]string{{"config", "validate"}, {"config", "validate", "--all"}} {
+		if code, stdout, stderr := e.run(args...); code != exitError || stdout != "" || stderr != want {
+			t.Errorf("%s: exit code = %d, stdout %q, stderr:\n%s\nwant %d, and stderr:\n%s", strings.Join(args, " "), code, stdout, stderr, exitError, want)
+		}
+	}
+
+	writeFiles(t, e.wd, map[string]string{"maisys.toml": "config_version = 1\n"})
+	want = "machines/box.toml:3:1: unknown key colour\n" +
+		"machines/box.toml:7:1: unknown key golang.Version (keys are case-sensitive: did you mean golang.version?)\n" +
+		"machines/box.toml:8:1: unknown key golang.versions\n" +
+		"machines/box.toml:10:2: unknown key newer_module\n" +
+		"maisys: 4 problems found\n" +
+		"maisys: an unknown key may mean the config needs a newer maisys than this one (dev)\n"
+	for _, args := range [][]string{{"config", "validate"}, {"config", "validate", "--all"}} {
+		if code, stdout, stderr := e.run(args...); code != exitError || stdout != "" || stderr != want {
+			t.Errorf("%s: exit code = %d, stdout %q, stderr:\n%s\nwant %d, and stderr:\n%s", strings.Join(args, " "), code, stdout, stderr, exitError, want)
+		}
 	}
 }
 

@@ -12,7 +12,7 @@ A machine's config is built in layers: each module's defaults (listed below), th
 - **Lists that are "combined across layers":** each layer adds its items to the list, leaving out duplicates and keeping the order. A later layer can't remove an item.
 - **Other lists:** replaced by the later layer.
 
-Keys are case-sensitive, and an unknown key is an error. Editors that support JSON schemas for TOML can complete and check keys with `config.schema.json`, which is published with each release: point to it with a `#:schema` line at the top of the file.
+Keys are case-sensitive. maisys ignores keys it doesn't know, so a config written for a newer maisys still works, but `maisys config validate` reports each one as an error, which catches typos. Editors that support JSON schemas for TOML can complete and check keys with `config.schema.json`, which is published with each release: point to it with a `#:schema` line at the top of the file.
 
 ## Machine and profile files
 

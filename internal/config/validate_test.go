@@ -630,6 +630,7 @@ func TestValidateReturnsLoadErrors(t *testing.T) {
 	repo := &config.Repo{
 		FS:      fstest.MapFS{"machines/box.toml": file("os = \"fedora\"\ncolour = \"blue\"\n")},
 		Modules: validationModules(),
+		Strict:  true,
 	}
 	m, err := repo.Validate("box")
 	if m != nil || err == nil || !strings.Contains(err.Error(), "machines/box.toml:2:1: unknown key colour") {
@@ -699,6 +700,7 @@ func TestValidateAll(t *testing.T) {
 			"profiles/Dev.toml":    file(``),
 		},
 		Modules: validationModules(),
+		Strict:  true,
 	}
 	want := []string{
 		`machines/Bad_Name.toml: invalid machine name "Bad_Name": use lower-case letters, digits, '.', '-' and '_'`,
@@ -711,6 +713,13 @@ func TestValidateAll(t *testing.T) {
 	}
 	if got := errorLines(validateAllErr(repo)); !slices.Equal(got, want) {
 		t.Errorf("errors:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Without Strict, the unknown key is ignored.
+	repo.Strict = false
+	want = slices.DeleteFunc(want, func(line string) bool { return strings.Contains(line, "unknown key") })
+	if got := errorLines(validateAllErr(repo)); !slices.Equal(got, want) {
+		t.Errorf("errors, ignoring unknown keys:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

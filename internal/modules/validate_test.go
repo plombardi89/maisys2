@@ -20,6 +20,7 @@ func TestExampleValidates(t *testing.T) {
 		FS:      os.DirFS("testdata/example"),
 		Modules: modules.All(),
 		URL:     "git@github.com:plombardi89/maisys-config.git",
+		Strict:  true,
 	}
 	if _, err := repo.ValidateAll(); err != nil {
 		t.Errorf("ValidateAll:\n%v", err)
@@ -76,7 +77,7 @@ var ruleRepo = fstest.MapFS{
 	"machines/arm.toml":        {Data: []byte("os = \"fedora\"\narch = \"arm64\"\n")},
 	"machines/windows.toml":    {Data: []byte("os = \"windows\"\n")},
 	"machines/no-os.toml":      {Data: []byte("")},
-	"machines/broken.toml":     {Data: []byte("os = \"fedora\"\ncolour = \"blue\"\n")},
+	"machines/broken.toml":     {Data: []byte("os = \"fedora\"\nprofiles = \"base\"\n")},
 }
 
 func TestModuleRules(t *testing.T) {
