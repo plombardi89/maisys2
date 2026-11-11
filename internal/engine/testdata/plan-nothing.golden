@@ -1,0 +1,8 @@
+Plan for phil-workp14s (ubuntu 26.04, amd64)
+config repo: https://example.com/old.git → https://example.com/new.git
+machine: phil-workp14s (was philboxv2)
+
+warning: profiles/dev.toml:3:1: golang.go_proxy is deprecated: use shell variables instead
+warning: Ubuntu 25.10 isn't one of the LTS releases maisys tests on (24.04 and 26.04); maisys may still work
+
+Nothing to change.

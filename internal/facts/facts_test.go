@@ -328,6 +328,10 @@ func TestDetect(t *testing.T) {
 	if s.OSID == "" || s.PrettyName == "" {
 		t.Errorf("OSID, PrettyName = %q, %q, want both set", s.OSID, s.PrettyName)
 	}
+	// The Fedora tests in CI run as root, in containers.
+	if want := os.Geteuid() == 0; s.Root != want {
+		t.Errorf("Root = %v, want %v", s.Root, want)
+	}
 	if runtime.GOOS == "windows" {
 		if s.OS != config.Windows || s.OSID != "windows" {
 			t.Errorf("OS, OSID = %q, %q, want windows", s.OS, s.OSID)

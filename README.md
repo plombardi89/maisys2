@@ -3,7 +3,7 @@
 maisys sets up and maintains development machines from a config repo that you keep in git. It runs on Fedora and Ubuntu, and on Windows 11 it installs WSL and sets up WSL distros.
 
 > [!NOTE]
-> maisys is in early development. It can create, check and sync a config repo, but it doesn't change your machine yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
+> maisys is in early development. It can create, check and sync a config repo, and `maisys sync` plans and applies changes, but no module installs anything yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
 
 ## Installing
 
@@ -29,6 +29,7 @@ This creates `~/maisys-config` with a machine file for this machine and every mo
 
 - `maisys config` shows this machine's merged config, and `maisys config --explain` shows which file set each value.
 - `maisys config validate` checks it, and `maisys config validate --all` checks every machine (the repo's own CI runs this). They also report keys maisys doesn't know, such as typos, which other commands ignore so that a config written for a newer maisys still works.
+- `maisys sync` shows a plan of what would change and asks before applying it (`--yes` applies without asking, `--dry-run` only shows the plan, `--only MODULE,...` limits it, `--local` skips updating maisys and pulling the config). `maisys status` shows this machine's setup and when it last synced.
 - `maisys sync CONFIG-URL` sets up another machine from the same repo once it's pushed somewhere git can reach. For a private repo over HTTPS, maisys uses git's own sign-in, asks for a read-only token if git can't sign in, or uses `MAISYS_CONFIG_TOKEN`.
 
 The modules and their settings are described in [docs/modules.md](docs/modules.md). Editors that understand JSON schemas for TOML can complete and check config files with `config.schema.json`, which is published with each release.

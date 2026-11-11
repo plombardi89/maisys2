@@ -1,0 +1,11 @@
+Plan for phil-workp14s (ubuntu 26.04, amd64)
+
+golang
+  + toolchain 1.27.4 (latest)
+packages
+  ? install jq (checked during apply)           [sudo]
+  ? repo docker (checked during apply)          [sudo]
+prune
+  ? unit x410 (checked during apply)            [sudo]
+
+1 to change, 3 to check during apply. Needs sudo.

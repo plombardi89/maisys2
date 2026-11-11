@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/gitrepo"
 	"github.com/plombardi89/maisys2/internal/settings"
 )
@@ -24,12 +25,24 @@ import (
 // told which config repo to use.
 var notSetUp = errNotSetUp.Error()
 
-// syncNotImplemented ends the output of a sync that got through every step
-// so far.
-const syncNotImplemented = `maisys: "sync" is not implemented yet` + "\n"
-
 // fc44 is the example repo's machine for the test system (fedora 44, amd64).
 const fc44 = "workbox-camwin-fc44"
+
+// testSystem describes the test system as the plan does.
+const testSystem = "fedora 44, amd64"
+
+// emptyPlan returns the plan for machine on system with nothing to change,
+// as for the example repo's machines, whose modules have no resources yet,
+// with header's lines at the top.
+func emptyPlan(machine, system string, header ...string) string {
+	var b strings.Builder
+	b.WriteString("Plan for " + machine + " (" + system + ")\n")
+	for _, line := range header {
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("\nNothing to change.\n")
+	return b.String()
+}
 
 // useGit lets maisys run git in e, kept away from the real user's git
 // config. It skips the test if git isn't installed.
@@ -143,11 +156,12 @@ func (e *testEnv) wantSettings(dir, url, machine string) {
 	}
 }
 
-// wantSynced checks that a sync got through every step so far.
-func wantSynced(t *testing.T, code int, stderr string) {
+// wantSynced checks that a sync of a machine in the example repo got
+// through every step, and found nothing to change.
+func wantSynced(t *testing.T, code int, stdout, stderr string) {
 	t.Helper()
-	if code != exitError || !strings.HasSuffix(stderr, syncNotImplemented) {
-		t.Fatalf("exit code = %d, stderr:\n%s\nwant %d, and stderr to end with %q", code, stderr, exitError, syncNotImplemented)
+	if code != exitOK || !strings.HasSuffix(stdout, "\nNothing to change.\n") {
+		t.Fatalf("exit code = %d, stdout:\n%s\nstderr:\n%s\nwant %d, and nothing to change", code, stdout, stderr, exitOK)
 	}
 }
 
@@ -156,8 +170,8 @@ func wantSynced(t *testing.T, code int, stderr string) {
 func (e *testEnv) setUp(remote string) string {
 	e.t.Helper()
 	e.system.Hostname = fc44
-	code, _, stderr := e.run("sync", remote)
-	wantSynced(e.t, code, stderr)
+	code, stdout, stderr := e.run("sync", remote)
+	wantSynced(e.t, code, stdout, stderr)
 	return e.defaultRepoDir()
 }
 
@@ -218,7 +232,7 @@ func TestSyncFirstRun(t *testing.T) {
 			remote := e.newRemote()
 
 			code, stdout, stderr := e.run(tt.args(e, remote)...)
-			wantSynced(t, code, stderr)
+			wantSynced(t, code, stdout, stderr)
 			dir := e.defaultRepoDir()
 			if tt.dir != "" {
 				dir = filepath.Join(e.wd, tt.dir)
@@ -227,7 +241,8 @@ func TestSyncFirstRun(t *testing.T) {
 			if !exists(filepath.Join(dir, "machines", fc44+".toml")) {
 				t.Errorf("%s isn't a clone of the config repo", dir)
 			}
-			want := "maisys: set up this machine as " + fc44 + " (from " + tt.source + "), with the config repo " + remote + ", cloned into " + dir + "\n"
+			want := "maisys: set up this machine as " + fc44 + " (from " + tt.source + "), with the config repo " + remote + ", cloned into " + dir + "\n" +
+				emptyPlan(fc44, testSystem)
 			if stdout != want {
 				t.Errorf("stdout = %q, want %q", stdout, want)
 			}
@@ -246,7 +261,7 @@ func TestSyncFirstRunPicker(t *testing.T) {
 	remote := e.newRemote()
 
 	code, stdout, stderr := e.run("sync", remote)
-	wantSynced(t, code, stderr)
+	wantSynced(t, code, stdout, stderr)
 	e.wantSettings(e.defaultRepoDir(), remote, fc44)
 	for _, want := range []string{
 		"maisys: which machine is this? The machines for this system (fedora 44, amd64) are:\n  1) " + fc44 + "\n",
@@ -323,7 +338,7 @@ func TestSyncFirstRunExistingClone(t *testing.T) {
 			}
 
 			code, stdout, stderr := e.run(args...)
-			wantSynced(t, code, stderr)
+			wantSynced(t, code, stdout, stderr)
 			e.wantSettings(dir, url, fc44)
 			if pulled := exists(filepath.Join(dir, "machines", "new.toml")); pulled != tt.pulled {
 				t.Errorf("pulled = %v, want %v", pulled, tt.pulled)
@@ -332,7 +347,8 @@ func TestSyncFirstRunExistingClone(t *testing.T) {
 			if url == "" {
 				where = dir + " (it has no remote)"
 			}
-			want := "maisys: set up this machine as " + fc44 + " (from --machine), with the config repo " + where + "\n"
+			want := "maisys: set up this machine as " + fc44 + " (from --machine), with the config repo " + where + "\n" +
+				emptyPlan(fc44, testSystem)
 			if stdout != want {
 				t.Errorf("stdout = %q, want %q", stdout, want)
 			}
@@ -461,15 +477,15 @@ func TestSyncFirstRunErrors(t *testing.T) {
 			e := newTestEnv(t)
 			e.useGit()
 			args, want := tt.setup(e)
-			code, _, stderr := e.run(args...)
+			code, stdout, stderr := e.run(args...)
 			if code != exitError {
 				t.Errorf("exit code = %d, want %d", code, exitError)
 			}
 			if want = strings.ReplaceAll(want, "%s", e.defaultRepoDir()); !strings.Contains(stderr, want) {
 				t.Errorf("stderr doesn't contain %q:\n%s", want, stderr)
 			}
-			if strings.Contains(stderr, "not implemented") {
-				t.Errorf("stderr = %q, want the sync to stop", stderr)
+			if strings.Contains(stdout, "Plan for") {
+				t.Errorf("stdout = %q, want the sync to stop before the plan", stdout)
 			}
 			if s := e.loadSettings(); s != nil {
 				t.Errorf("saved the local settings %+v, want none", s)
@@ -668,13 +684,13 @@ func TestSyncPull(t *testing.T) {
 				tt.prepare(e, clone)
 			}
 
-			code, _, stderr := e.run(tt.args...)
+			code, stdout, stderr := e.run(tt.args...)
 			if tt.failed {
-				if code != exitError || strings.Contains(stderr, "not implemented") {
+				if code != exitError || strings.Contains(stdout, "Plan for") {
 					t.Errorf("exit code = %d, stderr:\n%s\nwant %d and the sync to stop", code, stderr, exitError)
 				}
 			} else {
-				wantSynced(t, code, stderr)
+				wantSynced(t, code, stdout, stderr)
 			}
 			if want := strings.ReplaceAll(tt.stderr, "%s", clone); !strings.Contains(stderr, want) {
 				t.Errorf("stderr doesn't contain %q:\n%s", want, stderr)
@@ -702,9 +718,10 @@ func TestSyncSwitchRepo(t *testing.T) {
 		// setup sets up maisys with a first sync, and returns the arguments
 		// for the next sync, and the settings it should save.
 		setup func(e *testEnv) (args []string, want settings.Settings)
-		// stdout is what the next sync prints, with {old_url}, {old_dir},
-		// {new_url} and {new_dir} for the settings before and after.
-		stdout string
+		// header is the next sync's plan's header, with {old_url},
+		// {old_dir}, {new_url} and {new_dir} for the settings before and
+		// after.
+		header []string
 	}{
 		{
 			name: "another URL, with --dir",
@@ -713,18 +730,18 @@ func TestSyncSwitchRepo(t *testing.T) {
 				remote, dir := e.newRemote(), filepath.Join(e.t.TempDir(), "other")
 				return []string{"sync", remote, "--dir", dir}, settings.Settings{RepoDir: dir, RepoURL: remote, Machine: fc44}
 			},
-			stdout: "maisys: config repo: {old_url} → {new_url}\n",
+			header: []string{"config repo: {old_url} → {new_url}"},
 		},
 		{
 			name: "another URL, into the default folder",
 			setup: func(e *testEnv) ([]string, settings.Settings) {
 				e.system.Hostname = fc44
-				code, _, stderr := e.run("sync", e.newRemote(), "--dir", filepath.Join(e.t.TempDir(), "first"))
-				wantSynced(e.t, code, stderr)
+				code, stdout, stderr := e.run("sync", e.newRemote(), "--dir", filepath.Join(e.t.TempDir(), "first"))
+				wantSynced(e.t, code, stdout, stderr)
 				remote := e.newRemote()
 				return []string{"sync", remote}, settings.Settings{RepoDir: e.defaultRepoDir(), RepoURL: remote, Machine: fc44}
 			},
-			stdout: "maisys: config repo: {old_url} → {new_url}\n",
+			header: []string{"config repo: {old_url} → {new_url}"},
 		},
 		{
 			name: "another URL without the saved machine",
@@ -735,7 +752,7 @@ func TestSyncSwitchRepo(t *testing.T) {
 				dir := filepath.Join(e.t.TempDir(), "other")
 				return []string{"sync", remote, "--dir", dir}, settings.Settings{RepoDir: dir, RepoURL: remote, Machine: "box"}
 			},
-			stdout: "maisys: config repo: {old_url} → {new_url}\nmaisys: machine: box (was " + fc44 + ")\n",
+			header: []string{"config repo: {old_url} → {new_url}", "machine: box (was " + fc44 + ")"},
 		},
 		{
 			name: "another clone of the same URL",
@@ -745,7 +762,7 @@ func TestSyncSwitchRepo(t *testing.T) {
 				dir := e.cloneOf(remote)
 				return []string{"sync", "--dir", dir}, settings.Settings{RepoDir: dir, RepoURL: remote, Machine: fc44}
 			},
-			stdout: "maisys: config repo: {old_dir} → {new_dir}\n",
+			header: []string{"config repo: {old_dir} → {new_dir}"},
 		},
 		{
 			name: "a clone without a remote",
@@ -754,7 +771,7 @@ func TestSyncSwitchRepo(t *testing.T) {
 				dir := e.newClone(exampleRepo(e.t, nil))
 				return []string{"sync", "--dir", dir}, settings.Settings{RepoDir: dir, Machine: fc44}
 			},
-			stdout: "maisys: config repo: {old_url} → {new_dir}\n",
+			header: []string{"config repo: {old_url} → {new_dir}"},
 		},
 		{
 			name: "the same URL",
@@ -783,13 +800,17 @@ func TestSyncSwitchRepo(t *testing.T) {
 			old := e.loadSettings()
 
 			code, stdout, stderr := e.run(args...)
-			wantSynced(t, code, stderr)
+			wantSynced(t, code, stdout, stderr)
 			e.wantSettings(want.RepoDir, want.RepoURL, want.Machine)
-			wantOut := strings.NewReplacer(
+			r := strings.NewReplacer(
 				"{old_url}", old.RepoURL, "{old_dir}", old.RepoDir,
 				"{new_url}", want.RepoURL, "{new_dir}", want.RepoDir,
-			).Replace(tt.stdout)
-			if stdout != wantOut {
+			)
+			header := make([]string, len(tt.header))
+			for i, line := range tt.header {
+				header[i] = r.Replace(line)
+			}
+			if wantOut := emptyPlan(want.Machine, testSystem, header...); stdout != wantOut {
 				t.Errorf("stdout = %q, want %q", stdout, wantOut)
 			}
 			if !exists(filepath.Join(want.RepoDir, "maisys.toml")) {
@@ -859,9 +880,12 @@ func TestSyncSwitchRepoErrors(t *testing.T) {
 
 func TestSyncSwitchMachine(t *testing.T) {
 	tests := []struct {
-		name    string
-		args    []string
-		env     string
+		name string
+		args []string
+		env  string
+		// ubuntu runs the second sync on Ubuntu 26.04, phil-workp14s's
+		// system.
+		ubuntu  bool
 		code    int
 		machine string // the machine saved afterwards
 		stdout  string
@@ -870,19 +894,23 @@ func TestSyncSwitchMachine(t *testing.T) {
 		{
 			name:    "--machine",
 			args:    []string{"sync", "--machine", "phil-workp14s"},
+			ubuntu:  true,
 			machine: "phil-workp14s",
-			stdout:  "maisys: machine: phil-workp14s (was " + fc44 + ")\n",
+			stdout:  emptyPlan("phil-workp14s", "ubuntu 26.04, amd64", "machine: phil-workp14s (was "+fc44+")"),
 		},
 		{
 			name:    "the same machine",
 			args:    []string{"sync", "--machine", fc44},
 			machine: fc44,
+			stdout:  emptyPlan(fc44, testSystem),
 		},
 		{
 			name:    "MAISYS_MACHINE is only for one run",
 			args:    []string{"sync", "-v"},
 			env:     "phil-workp14s",
+			ubuntu:  true,
 			machine: fc44,
+			stdout:  emptyPlan("phil-workp14s", "ubuntu 26.04, amd64"),
 			stderr:  "maisys: machine phil-workp14s (from MAISYS_MACHINE)\n",
 		},
 		{
@@ -892,6 +920,17 @@ func TestSyncSwitchMachine(t *testing.T) {
 			machine: fc44,
 			stderr:  `maisys: machines/nope.toml doesn't exist in `,
 		},
+		{
+			// The switch is only saved once a plan is applied, so the saved
+			// machine stays the one that works here.
+			name:    "a machine for another system",
+			args:    []string{"sync", "--machine", "phil-workp14s"},
+			code:    exitError,
+			machine: fc44,
+			stdout:  "maisys: machine: phil-workp14s (was " + fc44 + ")\n",
+			stderr: "machines/phil-workp14s.toml:1:6: machine \"phil-workp14s\" is for Ubuntu 26.04, but it's running on Fedora 44\n" +
+				"maisys: 1 problem found\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -900,14 +939,18 @@ func TestSyncSwitchMachine(t *testing.T) {
 			remote := e.newRemote()
 			clone := e.setUp(remote)
 			e.vars[machineEnv] = tt.env
+			if tt.ubuntu {
+				e.system.OS, e.system.OSID, e.system.OSVersion = config.Ubuntu, "ubuntu", "26.04"
+				e.system.PrettyName = "Ubuntu 26.04 LTS"
+			}
 
 			code, stdout, stderr := e.run(tt.args...)
 			if tt.code == exitError {
-				if code != exitError || strings.Contains(stderr, "not implemented") {
+				if code != exitError || strings.Contains(stdout, "Plan for") {
 					t.Errorf("exit code = %d, stderr:\n%s\nwant %d and the sync to stop", code, stderr, exitError)
 				}
 			} else {
-				wantSynced(t, code, stderr)
+				wantSynced(t, code, stdout, stderr)
 			}
 			if stdout != tt.stdout {
 				t.Errorf("stdout = %q, want %q", stdout, tt.stdout)
@@ -985,12 +1028,9 @@ func TestSyncIgnoresUnknownKeys(t *testing.T) {
 	})
 
 	code, stdout, stderr := e.run("sync")
-	wantSynced(t, code, stderr)
+	wantSynced(t, code, stdout, stderr)
 	if strings.Contains(stderr, "unknown key") {
 		t.Errorf("stderr reports an unknown key:\n%s", stderr)
-	}
-	if stdout != "" {
-		t.Errorf("stdout = %q, want nothing", stdout)
 	}
 }
 

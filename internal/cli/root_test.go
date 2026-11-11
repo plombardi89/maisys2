@@ -3,15 +3,23 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/facts"
+	"github.com/plombardi89/maisys2/internal/modules"
+	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/settings"
+	"github.com/plombardi89/maisys2/internal/system"
+	"github.com/plombardi89/maisys2/internal/system/systemtest"
 )
 
 // testEnv is an environment for running maisys in tests, with a home
@@ -29,7 +37,23 @@ type testEnv struct {
 	findGit func() (string, error)
 	// gitBin is the git binary the test runs itself.
 	gitBin string
+	// now is the time maisys runs at.
+	now time.Time
+	// abort is closed to act as a second Ctrl-C.
+	abort chan struct{}
+	// modules are the modules maisys has: the built-in ones, unless a
+	// test uses fake ones.
+	modules []config.Module
+	// removers remove records of what's taken out of the config.
+	removers resource.Removers
+	// runner runs a sync's commands; runnerOpts are the options sync made
+	// it with.
+	runner     *systemtest.FakeRunner
+	runnerOpts system.Options
 }
+
+// testNow is the time maisys runs at in tests.
+var testNow = time.Date(2026, 11, 6, 9, 30, 0, 0, time.UTC)
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -52,6 +76,9 @@ func newTestEnv(t *testing.T) *testEnv {
 			RawArch:    "amd64",
 			Hostname:   "nothing-matches",
 		},
+		now:     testNow,
+		modules: modules.All(),
+		runner:  systemtest.NewFakeRunner(t),
 	}
 }
 
@@ -66,18 +93,34 @@ func (e *testEnv) environment(stdout, stderr *bytes.Buffer) *environment {
 			s := e.system
 			return &s, nil
 		},
-		isTerminal: func() bool { return e.terminal },
-		goos:       runtime.GOOS,
-		gitEnv:     e.gitEnv,
-		findGit:    e.findGit,
+		isTerminal:     func() bool { return e.terminal },
+		stdoutTerminal: func() bool { return e.terminal },
+		goos:           runtime.GOOS,
+		gitEnv:         e.gitEnv,
+		findGit:        e.findGit,
+		abort:          e.abort,
+		now:            func() time.Time { return e.now },
+		modules:        e.modules,
+		removers:       e.removers,
+		newRunner: func(opts system.Options) system.Runner {
+			e.runnerOpts = opts
+			return e.runner
+		},
 	}
 }
 
 // run runs maisys with args, and returns its exit code and output.
 func (e *testEnv) run(args ...string) (code int, stdout, stderr string) {
 	e.t.Helper()
+	return e.runContext(e.t.Context(), args...)
+}
+
+// runContext runs maisys with args and the context ctx, which a test can
+// cancel to act as Ctrl-C.
+func (e *testEnv) runContext(ctx context.Context, args ...string) (code int, stdout, stderr string) {
+	e.t.Helper()
 	var out, errOut bytes.Buffer
-	code = execute(e.t.Context(), args, e.environment(&out, &errOut))
+	code = execute(ctx, args, e.environment(&out, &errOut))
 	return code, out.String(), errOut.String()
 }
 
@@ -121,7 +164,7 @@ func run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 // TestExecute checks the entry point cmd/maisys uses.
 func TestExecute(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--version"}, &out, &errOut, func(string) string { return "" })
+	code := Execute(context.Background(), nil, []string{"--version"}, &out, &errOut, func(string) string { return "" })
 	if code != exitOK || !strings.HasPrefix(out.String(), "maisys dev") {
 		t.Errorf("Execute(--version) = %d, stdout %q, stderr %q; want %d and the version", code, out.String(), errOut.String(), exitOK)
 	}
@@ -149,24 +192,13 @@ func TestHelpListsCommands(t *testing.T) {
 	}
 }
 
-func TestPlaceholderCommands(t *testing.T) {
-	tests := []struct {
-		args []string
-		name string
-	}{
-		{[]string{"status", "-v"}, "status"},
-	}
-	for _, tt := range tests {
-		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
-			code, _, stderr := run(t, tt.args...)
-			if code != exitError {
-				t.Errorf("exit code = %d, want %d", code, exitError)
-			}
-			want := `maisys: "` + tt.name + `" is not implemented yet`
-			if !strings.Contains(stderr, want) {
-				t.Errorf("stderr = %q, want it to contain %q", stderr, want)
-			}
-		})
+func TestNotImplemented(t *testing.T) {
+	root := &cobra.Command{Use: "maisys"}
+	cmd := &cobra.Command{Use: "helper", RunE: notImplemented}
+	root.AddCommand(cmd)
+	err := notImplemented(cmd, nil)
+	if !errors.Is(err, errNotImplemented) || err.Error() != `"helper" is not implemented yet` {
+		t.Errorf("notImplemented() = %v, want %q", err, `"helper" is not implemented yet`)
 	}
 }
 
