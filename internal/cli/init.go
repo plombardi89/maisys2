@@ -140,19 +140,13 @@ func initConfig(cmd *cobra.Command, g *globalOptions, opts initOptions) error {
 }
 
 // initDir returns the absolute path of the folder config init writes to:
-// dir, relative to the working directory, or else the default.
+// dir, with a leading "~" for the home folder and relative to the working
+// directory, or else the default.
 func (g *globalOptions) initDir(dir string, paths settings.Paths) (string, error) {
 	if dir == "" {
 		return filepath.Clean(paths.DefaultRepoDir()), nil
 	}
-	if filepath.IsAbs(dir) {
-		return filepath.Clean(dir), nil
-	}
-	wd, err := g.getwd()
-	if err != nil {
-		return "", fmt.Errorf("finding the working directory: %w", err)
-	}
-	return filepath.Join(wd, dir), nil
+	return g.absPath(dir, paths.Home)
 }
 
 // checkEmpty checks that dir is an empty folder, or doesn't exist.

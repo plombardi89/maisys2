@@ -147,6 +147,14 @@ func TestConfigInit(t *testing.T) {
 			},
 		},
 		{
+			name:    "fedora, in a folder in the home folder, written with ~",
+			system:  fedoraSystem,
+			args:    []string{"~" + string(filepath.Separator) + "cfg"},
+			dir:     "%h/cfg",
+			machine: "fedora-box",
+			files:   []string{"machines/fedora-box.toml", "profiles/fedora.toml"},
+		},
+		{
 			name:    "ubuntu, in an empty folder relative to the working directory, with --machine",
 			system:  ubuntuSystem,
 			args:    []string{"cfg", "--machine", "laptop"},
