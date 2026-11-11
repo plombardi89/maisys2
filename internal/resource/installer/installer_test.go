@@ -332,6 +332,7 @@ func TestApplyScriptFails(t *testing.T) {
 func TestApplyWrongChecksum(t *testing.T) {
 	f := newFixture(t, 0)
 	f.in.SHA256 = sha("another script")
+	writeFile(t, filepath.Join(f.leftover(), "candidates", "java", "current"), "21")
 	_, err := f.in.Apply(t.Context(), f.rt)
 	if !errors.Is(err, errChecksum) || !strings.Contains(err.Error(), "has sha256 "+sha(testScript)+", not "+sha("another script")) {
 		t.Errorf("Apply() error = %v, want a checksum error", err)
@@ -342,11 +343,13 @@ func TestApplyWrongChecksum(t *testing.T) {
 	if cmds := f.runner.Commands(); cmds != nil {
 		t.Errorf("Apply() ran %q, want nothing", cmds)
 	}
+	assertContent(t, filepath.Join(f.leftover(), "candidates", "java", "current"), "21")
 }
 
 func TestApplyDownloadFails(t *testing.T) {
 	f := newFixture(t, 0)
 	f.in.URL = f.server.URL + "/missing"
+	writeFile(t, filepath.Join(f.leftover(), "candidates", "java", "current"), "21")
 	_, err := f.in.Apply(t.Context(), f.rt)
 	want := "installing sdkman failed after 3 attempts: couldn't download the sdkman installer from " + f.in.URL + ": 404 Not Found"
 	if err == nil || err.Error() != want {
@@ -355,6 +358,8 @@ func TestApplyDownloadFails(t *testing.T) {
 	if got := f.server.count(); got != 3 {
 		t.Errorf("Apply() downloaded %d times, want 3", got)
 	}
+	// The script never ran, so the install it would have repaired stays.
+	assertContent(t, filepath.Join(f.leftover(), "candidates", "java", "current"), "21")
 }
 
 func TestApplyCancelled(t *testing.T) {
@@ -389,18 +394,38 @@ func TestRemover(t *testing.T) {
 	if r.Kind() != Kind {
 		t.Errorf("Kind() = %q, want %q", r.Kind(), Kind)
 	}
-	for _, rec := range []state.Record{
-		{ID: "installer:sdkman", Kind: Kind, Details: map[string]string{"name": "sdkman"}},
-		{ID: "installer:sdkman", Kind: Kind},
-	} {
-		got, err := r.CheckRemove(t.Context(), &resource.Runtime{}, rec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertChange(t, got, resource.Change{Action: resource.Orphan, Summary: "sdkman"})
-		if err := r.Remove(t.Context(), &resource.Runtime{}, rec); err != nil {
-			t.Errorf("Remove() error = %v", err)
-		}
+	home := t.TempDir()
+	there, gone := filepath.Join(home, ".sdkman"), filepath.Join(home, ".gone")
+	writeFile(t, filepath.Join(there, "var", "version"), "5.19.0")
+	orphan := resource.Change{Action: resource.Orphan, Summary: "sdkman"}
+	tests := []struct {
+		name string
+		rec  state.Record
+		want resource.Change
+	}{
+		{"there", state.Record{Details: map[string]string{"name": "sdkman"}, Paths: []string{there}}, orphan},
+		{"there, without a name", state.Record{Paths: []string{there}}, orphan},
+		{"partly there", state.Record{Paths: []string{gone, there}}, orphan},
+		{"no paths", state.Record{}, orphan},
+		{"a relative path", state.Record{Paths: []string{".gone"}}, orphan},
+		{"gone", state.Record{Details: map[string]string{"name": "sdkman"}, Paths: []string{gone}}, resource.Change{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := tt.rec
+			rec.ID, rec.Kind = "installer:sdkman", Kind
+			got, err := r.CheckRemove(t.Context(), &resource.Runtime{}, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertChange(t, got, tt.want)
+			if err := r.Remove(t.Context(), &resource.Runtime{}, rec); err != nil {
+				t.Errorf("Remove() error = %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(there, "var", "version")); err != nil {
+				t.Errorf("Remove() deleted the install: %v", err)
+			}
+		})
 	}
 }
 
@@ -430,6 +455,14 @@ func assertChange(t *testing.T, got, want resource.Change) {
 	t.Helper()
 	if got.Action != want.Action || got.Summary != want.Summary || !slices.Equal(got.Notes, want.Notes) {
 		t.Errorf("change = %s %q %q, want %s %q %q", got.Action, got.Summary, got.Notes, want.Action, want.Summary, want.Notes)
+	}
+}
+
+func assertContent(t *testing.T, name, want string) {
+	t.Helper()
+	got, err := os.ReadFile(name)
+	if err != nil || string(got) != want {
+		t.Errorf("%s holds %q (%v), want %q", name, got, err, want)
 	}
 }
 

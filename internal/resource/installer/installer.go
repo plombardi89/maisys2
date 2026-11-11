@@ -8,11 +8,12 @@
 // finishes without a complete install, is retried with backoff, deleting
 // what a half-finished install leaves behind before each attempt; if no
 // attempt works, those leftovers are deleted again, and the error has the
-// last attempt's output.
+// last attempt's output. If the script never ran, because it couldn't be
+// downloaded, say, nothing is deleted.
 //
 // Installs aren't removed when they're taken out of the config: the
 // removal rules leave them alone. The plan says they're no longer used,
-// and their records stay.
+// and their records stay until none of their paths are left.
 package installer
 
 import (
@@ -81,7 +82,8 @@ type Installer struct {
 	// Leftovers are the absolute paths a half-finished install leaves
 	// behind, such as ~/.sdkman. If one exists while the install isn't
 	// complete, the plan calls the install a repair. They're deleted
-	// before each attempt, and after the last one if it fails.
+	// before each run of the script, and after the last attempt if it
+	// fails and the script ran.
 	Leftovers []string
 	// Paths are the paths the install owns, for the ownership check and the
 	// state file.
@@ -219,9 +221,10 @@ func (in *Installer) Apply(ctx context.Context, rt *resource.Runtime) (state.Rec
 	defer s.remove()
 
 	var err error
+	var ran bool
 	n := 1
 	for ; ; n++ {
-		if err = in.attempt(ctx, rt, &s); err == nil {
+		if err = in.attempt(ctx, rt, &s, &ran); err == nil {
 			return state.Record{
 				Paths:   in.Paths,
 				Details: map[string]string{"name": in.Name, "url": in.URL, "sha256": s.sum},
@@ -236,8 +239,12 @@ func (in *Installer) Apply(ctx context.Context, rt *resource.Runtime) (state.Rec
 			break
 		}
 	}
-	if rerr := in.removeLeftovers(); rerr != nil {
-		err = errors.Join(err, rerr)
+	// An install the script never ran on, because the download failed, say,
+	// is left as it is.
+	if ran {
+		if rerr := in.removeLeftovers(); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
 	}
 	if n == 1 {
 		return state.Record{}, fmt.Errorf("installing %s failed: %w", in.Name, err)
@@ -250,8 +257,8 @@ func (in *Installer) Apply(ctx context.Context, rt *resource.Runtime) (state.Rec
 var errChecksum = errors.New("the installer script's sha256 is wrong")
 
 // attempt runs the script once, after downloading it into s if it isn't
-// yet, and checks the install.
-func (in *Installer) attempt(ctx context.Context, rt *resource.Runtime, s *script) error {
+// yet, and checks the install. It sets ran once it runs the script.
+func (in *Installer) attempt(ctx context.Context, rt *resource.Runtime, s *script, ran *bool) error {
 	if s.path == "" {
 		if err := in.download(ctx, rt, s); err != nil {
 			return err
@@ -260,6 +267,7 @@ func (in *Installer) attempt(ctx context.Context, rt *resource.Runtime, s *scrip
 	if err := in.removeLeftovers(); err != nil {
 		return err
 	}
+	*ran = true
 	res, err := rt.Runner.Run(ctx, system.Cmd{
 		Name:  cmp.Or(in.Shell, "bash"),
 		Args:  append([]string{s.path}, in.Args...),
@@ -410,7 +418,8 @@ func (in *Installer) log(rt *resource.Runtime, format string, args ...any) {
 
 // Remover handles the records of installs taken out of the config. The
 // removal rules leave installs alone, so it reports them as no longer used
-// and keeps their records.
+// and keeps their records, until none of their paths are left: then the
+// record is dropped.
 type Remover struct{}
 
 var _ resource.Remover = Remover{}
@@ -418,8 +427,19 @@ var _ resource.Remover = Remover{}
 // Kind returns "installer".
 func (Remover) Kind() string { return Kind }
 
-// CheckRemove reports the install as no longer used: it isn't removed.
+// CheckRemove reports the install as no longer used: it isn't removed. If
+// none of the paths rec records exist any more, there's nothing left to
+// report, and the change is no change.
 func (Remover) CheckRemove(_ context.Context, _ *resource.Runtime, rec state.Record) (resource.Change, error) {
+	gone := len(rec.Paths) > 0
+	for _, p := range rec.Paths {
+		if _, err := os.Lstat(p); !filepath.IsAbs(p) || !errors.Is(err, fs.ErrNotExist) {
+			gone = false
+		}
+	}
+	if gone {
+		return resource.Change{}, nil
+	}
 	name := rec.Details["name"]
 	if name == "" {
 		name, _ = strings.CutPrefix(rec.ID, Kind+":")
