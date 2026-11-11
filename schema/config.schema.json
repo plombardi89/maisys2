@@ -1,0 +1,767 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/plombardi89/maisys2/releases/latest/download/config.schema.json",
+  "title": "maisys config",
+  "description": "A maisys machine file (machines/<name>.toml) or profile (profiles/<name>.toml).",
+  "type": "object",
+  "properties": {
+    "profiles": {
+      "description": "Machine files only. The profiles to apply before the machine file, in order, by their file names in profiles/ without .toml.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "os": {
+      "description": "The operating system: \"fedora\", \"ubuntu\" or \"windows\". Every machine file sets it. A profile that sets it can only be used by machines with that OS.",
+      "type": "string",
+      "enum": [
+        "fedora",
+        "ubuntu",
+        "windows"
+      ]
+    },
+    "os_version": {
+      "description": "Machine files only, optional. The OS version, such as \"44\" or \"26.04\". maisys refuses to run on any other version.",
+      "type": "string"
+    },
+    "arch": {
+      "description": "Linux machine files only, optional. The CPU architecture: \"amd64\" or \"arm64\". maisys refuses to run on any other architecture.",
+      "type": "string",
+      "enum": [
+        "amd64",
+        "arm64"
+      ]
+    },
+    "sudo": {
+      "description": "Lets your user run sudo without a password.",
+      "type": "object",
+      "properties": {
+        "nopasswd": {
+          "description": "`nopasswd` lets your user run sudo without a password, through a rule in /etc/sudoers.d that is checked with visudo before it's installed. Turning it off deletes that rule again, unless your user isn't in the wheel or sudo group, which would leave them without sudo.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "packages": {
+      "description": "Installs and upgrades system packages with apt or dnf.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "install": {
+          "description": "`install` lists the packages to install and keep up to date, by the names the machine's OS uses for them. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "files": {
+      "description": "Copies files, directories and templates from the config repo into your home folder, and reports files changed since.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "vars": {
+          "description": "`vars` holds values for templates, which read them as .Vars.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "items": {
+          "description": "`items` are the files and directories to copy, each under a name you choose. A later profile or the machine file can change one item, or turn it off with enabled = false, without repeating the rest.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "description": "`enabled` copies the item. Items are on unless turned off.",
+                "type": "boolean",
+                "default": true
+              },
+              "source": {
+                "description": "`source` is the path in the config repo. A directory is copied file by file, and files in the target directory that don't come from it are left alone.",
+                "type": "string",
+                "default": ""
+              },
+              "target": {
+                "description": "`target` is where the item goes, inside your home folder, such as \"~/.gitconfig\". A directory can also go in \"~/\" itself. On Windows, ~ is %USERPROFILE%.",
+                "type": "string",
+                "default": ""
+              },
+              "template": {
+                "description": "`template` renders the source as a Go text/template, which can use .Vars, .Facts and .Machine.",
+                "type": "boolean",
+                "default": false
+              },
+              "mode": {
+                "description": "`mode` sets the permissions, such as \"0600\". Without it, files keep the executable bit they have in the config repo.",
+                "type": "string",
+                "default": ""
+              },
+              "eol": {
+                "description": "`eol` set to \"crlf\" converts line endings to CRLF, for Windows programs that need them. Without it, line endings stay as they are in the config repo.",
+                "type": "string",
+                "default": ""
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "shell": {
+      "description": "Installs bash, zsh and fish, sets the login shell, writes each shell's environment and rc files, and manages oh-my-zsh.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "login": {
+          "description": "`login` is the login shell: \"bash\", \"zsh\" or \"fish\", which must be enabled. Without it, the login shell isn't changed.",
+          "type": "string",
+          "default": ""
+        },
+        "bash": {
+          "description": "`bash` configures bash.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "`enabled` installs the shell and writes its environment file.",
+              "type": "boolean",
+              "default": false
+            },
+            "variables": {
+              "description": "`variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "pre_snippets": {
+              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "snippets": {
+              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "manage_rc": {
+              "description": "`manage_rc` lets maisys write ~/.bashrc. Set it to false to keep your own, and source ~/.config/maisys/shell/env.sh from it.",
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "zsh": {
+          "description": "`zsh` configures zsh.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "`enabled` installs the shell and writes its environment file.",
+              "type": "boolean",
+              "default": false
+            },
+            "variables": {
+              "description": "`variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "pre_snippets": {
+              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "snippets": {
+              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "manage_rc": {
+              "description": "`manage_rc` lets maisys write ~/.zshrc. Set it to false to keep your own, and source ~/.config/maisys/shell/env.zsh from it.",
+              "type": "boolean",
+              "default": true
+            },
+            "oh_my_zsh": {
+              "description": "`oh_my_zsh` configures oh-my-zsh.",
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "description": "`enabled` installs oh-my-zsh, with its own updater turned off, and loads it from ~/.zshrc.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "ref": {
+                  "description": "`ref` is the oh-my-zsh branch, tag or commit to check out. A branch is updated on every sync.",
+                  "type": "string",
+                  "default": "master"
+                },
+                "theme": {
+                  "description": "`theme` is the theme to use: one oh-my-zsh includes, or one from custom_themes.",
+                  "type": "string",
+                  "default": "robbyrussell"
+                },
+                "plugins": {
+                  "description": "`plugins` lists the plugins to load: ones oh-my-zsh includes, or ones from custom_plugins. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "custom_themes": {
+                  "description": "`custom_themes` are themes from other git repos, by theme name.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "repo": {
+                        "description": "`repo` is the URL of the git repo.",
+                        "type": "string",
+                        "default": ""
+                      },
+                      "ref": {
+                        "description": "`ref` is the branch, tag or commit to check out. A branch is updated on every sync.",
+                        "type": "string",
+                        "default": ""
+                      },
+                      "file": {
+                        "description": "`file` is the theme file in the repo, such as \"aphrodite.zsh-theme\".",
+                        "type": "string",
+                        "default": ""
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "custom_plugins": {
+                  "description": "`custom_plugins` are plugins from other git repos, by plugin name.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "repo": {
+                        "description": "`repo` is the URL of the git repo.",
+                        "type": "string",
+                        "default": ""
+                      },
+                      "ref": {
+                        "description": "`ref` is the branch, tag or commit to check out. A branch is updated on every sync.",
+                        "type": "string",
+                        "default": ""
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "fish": {
+          "description": "`fish` configures fish, which loads maisys's environment from ~/.config/fish/conf.d, so its config.fish is never changed.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "`enabled` installs the shell and writes its environment file.",
+              "type": "boolean",
+              "default": false
+            },
+            "variables": {
+              "description": "`variables` are set before anything else is loaded, so they can configure what comes after, such as oh-my-zsh.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "pre_snippets": {
+              "description": "`pre_snippets` are files in the config repo, in the shell's own syntax, that are sourced after variables and before oh-my-zsh and maisys's environment. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "snippets": {
+              "description": "`snippets` are files in the config repo, in the shell's own syntax, that are sourced after everything else. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "golang": {
+      "description": "Installs the Go toolchain, and Go programs with go install.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        },
+        "tools": {
+          "description": "`tools` lists Go programs to install with go install, as a package path and a version, such as \"mvdan.cc/gofumpt@latest\". A program is only reinstalled when a newer version exists. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "mage": {
+      "description": "Installs Mage, a make-like build tool for Go.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "golangci_lint": {
+      "description": "Installs golangci-lint, a Go linter runner.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "kubectl": {
+      "description": "Installs kubectl, the Kubernetes command-line tool.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "stern": {
+      "description": "Installs stern, which tails logs from Kubernetes pods.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "yq": {
+      "description": "Installs yq, a YAML, JSON and XML processor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "lnav": {
+      "description": "Installs lnav, a log file viewer.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "protoc": {
+      "description": "Installs protoc, the Protocol Buffers compiler.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mutagen": {
+      "description": "Installs Mutagen, which syncs files and forwards network ports.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "hashicorp": {
+      "description": "Adds HashiCorp's package repository and installs tools from it.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "tools": {
+          "description": "`tools` lists the packages to install from HashiCorp's repository, such as \"packer\" or \"vagrant\". Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "podman": {
+      "description": "Installs Podman, plus iptables-nft on Fedora.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sdkman": {
+      "description": "Installs SDKMAN, and repairs installs that didn't finish.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "opencode": {
+      "description": "Makes sure opencode v2 or newer is installed. From then on, opencode updates itself.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "python_tools": {
+      "description": "Installs uv, and Python command-line tools with uv tool install.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "tools": {
+          "description": "`tools` lists the Python packages to install with uv tool install, such as \"codespell\". Each one gets an environment of its own. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "steam": {
+      "description": "Installs Steam: Valve's package on Ubuntu, and RPM Fusion's on Fedora.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "intellij": {
+      "description": "Installs IntelliJ IDEA Ultimate, with an idea command to start it.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "description": "`version` to install: \"latest\" (the default) for the newest stable release, or an exact version such as \"1.2.3\" to pin it.",
+          "type": "string",
+          "default": "latest"
+        },
+        "install_deps": {
+          "description": "`install_deps` also installs the system packages IntelliJ needs to run, which minimal installs and WSL distros may not have.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "wsl": {
+      "description": "Sets up a Linux distro running in WSL: /etc/wsl.conf, opening links in Windows, and optionally the Windows Git Credential Manager.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "systemd": {
+          "description": "`systemd` runs systemd in the distro.",
+          "type": "boolean",
+          "default": true
+        },
+        "wslg": {
+          "description": "`wslg` shows Linux GUI apps with WSLg. Set it to false to use X410 instead, through a bridge service maisys sets up.",
+          "type": "boolean",
+          "default": true
+        },
+        "append_windows_path": {
+          "description": "`append_windows_path` adds the Windows PATH to the end of the distro's PATH.",
+          "type": "boolean",
+          "default": true
+        },
+        "git_credential_manager": {
+          "description": "`git_credential_manager` makes git use the Windows Git Credential Manager, so the distro shares the sign-ins Windows has. It needs Git for Windows.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "legacy": {
+      "description": "Removes files left behind by the Ansible setup maisys replaces.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "winget": {
+      "description": "Installs Windows packages with winget and keeps them at their latest version.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "install": {
+          "description": "`install` lists winget package IDs, such as \"Microsoft.WindowsTerminal\". Packages taken off the list aren't uninstalled. Git.Git is always installed, because maisys needs it. Combined across layers: profiles and the machine file add to the list instead of replacing it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "wsl_host": {
+      "description": "Installs and updates WSL, writes .wslconfig, and creates and sets up distros.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        },
+        "default_distro": {
+          "description": "`default_distro` is the distro WSL starts by default: one of distros.",
+          "type": "string",
+          "default": ""
+        },
+        "config_url": {
+          "description": "`config_url` is the HTTPS URL new distros clone the config repo from. Without it, they use this machine's own config URL, which must then be HTTPS.",
+          "type": "string",
+          "default": ""
+        },
+        "wslconfig": {
+          "description": "`wslconfig` sets keys in %USERPROFILE%\\.wslconfig. Keys left out aren't written, so WSL's defaults apply. Changes take effect after wsl --shutdown.",
+          "type": "object",
+          "properties": {
+            "memory": {
+              "description": "`memory` is the most memory WSL can use, such as \"16GB\".",
+              "type": "string",
+              "default": ""
+            },
+            "processors": {
+              "description": "`processors` is the number of processors WSL can use.",
+              "type": "integer",
+              "default": 0
+            },
+            "swap": {
+              "description": "`swap` is the size of WSL's swap file, such as \"8GB\", or \"0\" for none.",
+              "type": "string",
+              "default": ""
+            },
+            "networking_mode": {
+              "description": "`networking_mode` is \"nat\" or \"mirrored\".",
+              "type": "string",
+              "default": ""
+            },
+            "auto_memory_reclaim": {
+              "description": "`auto_memory_reclaim` is how WSL gives unused memory back to Windows: \"disabled\", \"gradual\" or \"dropcache\".",
+              "type": "string",
+              "default": ""
+            },
+            "dns_tunneling": {
+              "description": "`dns_tunneling` answers WSL's DNS requests through Windows.",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "distros": {
+          "description": "`distros` are the distros to create, by distro name. Each is created and set up once, then kept up to date by running maisys sync inside it. Distros are never deleted or recreated.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "image": {
+                "description": "`image` is what to install, by its name in wsl --list --online, such as \"FedoraLinux-44\". It must match the machine's os, and os_version if set. It's only used when the distro is created.",
+                "type": "string",
+                "default": ""
+              },
+              "machine": {
+                "description": "`machine` is the Linux machine file maisys applies inside the distro.",
+                "type": "string",
+                "default": ""
+              },
+              "user": {
+                "description": "`user` is the Linux user to create, in the wheel or sudo group. It gets a random password, shown once when the distro is created, which you should change with passwd. For the first sync inside the distro only, maisys adds a temporary rule that lets it use sudo without the password; set sudo.nopasswd in the machine file to keep that.",
+                "type": "string",
+                "default": ""
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "windows_terminal": {
+      "description": "Makes wsl_host's default distro the default profile in Windows Terminal, keeping the comments and formatting in its settings.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`enabled` turns the module on.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

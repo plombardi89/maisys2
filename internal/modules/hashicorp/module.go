@@ -27,3 +27,10 @@ type Config struct {
 	// such as "packer" or "vagrant".
 	Tools []string `toml:"tools" merge:"union"`
 }
+
+var _ config.Checker = (*Config)(nil)
+
+// Check checks that tools has no empty entries.
+func (c *Config) Check(check *config.Check) {
+	check.NoEmptyItems("tools", c.Tools)
+}

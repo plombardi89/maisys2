@@ -21,6 +21,17 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # docs/modules.md, schema/config.schema.json and
+      # internal/modules/docs_gen.go come from the module config structs.
+      - name: Check generated files are up to date
+        run: |
+          go generate ./...
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Generated files are out of date. Run 'make generate' and commit the result." >&2
+            git status --porcelain
+            git diff
+            exit 1
+          fi
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0

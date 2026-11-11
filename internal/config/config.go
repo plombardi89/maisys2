@@ -3,6 +3,8 @@
 // defaults.
 package config
 
+import "regexp"
+
 // OS is an operating system a machine can declare with the os key.
 type OS string
 
@@ -31,6 +33,11 @@ const (
 	AMD64 Arch = "amd64"
 	ARM64 Arch = "arm64"
 )
+
+// AllArch returns every architecture maisys supports.
+func AllArch() []Arch {
+	return []Arch{AMD64, ARM64}
+}
 
 // Module is a module's configuration side: what it is, and its config
 // struct.
@@ -68,6 +75,11 @@ type ModuleInfo struct {
 //   - tables keyed by name (map fields) are merged entry by entry, and new
 //     entries start from their type's defaults (see Defaulter);
 //   - lists tagged merge:"union" combine across layers, without duplicates.
+//
+// A field tagged deprecated:"<what to use instead>" still works, but every
+// file that sets it gets a warning (see Machine.Warnings), and the docs say
+// so. Deprecated keys are removed only with a new config_version; after
+// that, they're unknown keys (see Repo.Strict).
 type ModuleConfig interface {
 	IsEnabled() bool
 }
@@ -94,6 +106,14 @@ type Versioned struct {
 	Version string `toml:"version"`
 }
 
+var exactVersion = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]+)?$`)
+
+// IsExactVersion reports whether v is a well-formed exact version, such as
+// "1.2.3", "v2.15.0" or "1.0.0-rc.1".
+func IsExactVersion(v string) bool {
+	return exactVersion.MatchString(v)
+}
+
 // Defaulter is implemented by the values of tables keyed by name (for
 // example a files item) whose defaults aren't their zero values.
 type Defaulter interface {
@@ -117,6 +137,17 @@ type Machine struct {
 
 	// Origins records which files set each value, keyed by its dotted path
 	// (for example "golang.version"). For lists that combine across layers,
-	// it lists every file that added to them, in order.
+	// it lists every file that added to them, in order. The machine file's
+	// own keys (os, os_version, arch and profiles) are recorded too.
 	Origins map[string][]string
+
+	// Warnings are problems that don't stop the config from being used,
+	// such as deprecated keys, each starting with file:line:column.
+	Warnings []string
+
+	// layers lists the files merged into the machine, in order: its
+	// profiles, then its machine file.
+	layers []string
+	// locs records where each of those files sets each value.
+	locs map[string]*locations
 }

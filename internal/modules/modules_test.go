@@ -326,7 +326,7 @@ func TestExample(t *testing.T) {
 		},
 	}
 
-	repo := &config.Repo{FS: os.DirFS("testdata/example"), Modules: modules.All()}
+	repo := &config.Repo{FS: os.DirFS("testdata/example"), Modules: modules.All(), Strict: true}
 	for _, tt := range tests {
 		t.Run(tt.machine, func(t *testing.T) {
 			m, err := repo.LoadMachine(tt.machine)

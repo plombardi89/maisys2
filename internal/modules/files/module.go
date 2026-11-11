@@ -40,7 +40,8 @@ type Item struct {
 	// left alone.
 	Source string `toml:"source"`
 	// Target is where the item goes, inside your home folder, such as
-	// "~/.gitconfig". On Windows, ~ is %USERPROFILE%.
+	// "~/.gitconfig". A directory can also go in "~/" itself. On Windows,
+	// ~ is %USERPROFILE%.
 	Target string `toml:"target"`
 	// Template renders the source as a Go text/template, which can use
 	// .Vars, .Facts and .Machine.

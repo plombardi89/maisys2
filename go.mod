@@ -3,9 +3,12 @@ module github.com/plombardi89/maisys2
 go 1.27.3
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.42.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 )
 
 require (
