@@ -46,17 +46,17 @@ func (apt) query(ctx context.Context, m *Manager, names []string) (map[string]in
 		infos[name] = dpkgInfo(rows, name)
 	}
 	// Names are checked against current lists: stale ones are refreshed
-	// now if sudo works without a password, as the plan never asks for
-	// one. Otherwise names the old lists don't have are checked when the
-	// lists are refreshed, before installing.
+	// now if sudo works without a password and no other program is using
+	// apt, as the plan never asks for a password or waits. Otherwise names
+	// the old lists don't have are checked when the lists are refreshed,
+	// before installing.
 	stale := m.listsStale()
 	if stale {
-		switch err := m.refresh(ctx); {
-		case err == nil:
-			stale = false
-		case !errors.Is(err, system.ErrNeedsPassword):
+		fresh, err := m.refreshForPlan(ctx)
+		if err != nil {
 			return nil, err
 		}
+		stale = !fresh
 	}
 	if !m.listsDownloaded() {
 		for name, in := range infos {
@@ -233,7 +233,7 @@ func (m *Manager) refresh(ctx context.Context) error {
 	if _, ok := m.backend.(apt); !ok || !m.listsStale() {
 		return nil
 	}
-	_, err := m.Run(ctx, system.Cmd{Name: "apt-get", Args: []string{"update"}, Env: noninteractive, Root: true, Label: "apt-get update"})
+	_, err := m.Run(ctx, aptUpdate())
 	if err != nil {
 		if _, ok := errors.AsType[*lockError](err); ok {
 			return err
@@ -242,11 +242,49 @@ func (m *Manager) refresh(ctx context.Context) error {
 			return err
 		}
 	}
-	m.mu.Lock()
-	m.sourcesChanged, m.refreshed = false, m.now()
-	m.mu.Unlock()
+	m.listsRefreshed()
 	if err != nil {
 		m.notify("couldn't refresh the package lists, so packages are installed from the lists there are: %v", err)
 	}
 	return nil
+}
+
+// refreshForPlan refreshes apt's stale package lists for the plan, and
+// reports whether it did. Unlike refresh, it never waits for apt's lock:
+// if sudo needs a password, another program is using apt, or apt-get
+// update fails, the lists stay as they are until refresh tries again
+// before installing, and the plan doesn't try again. It says why in the
+// log, unless sudo needs a password. It only fails if ctx is done.
+// m.lookupMu must be held.
+func (m *Manager) refreshForPlan(ctx context.Context) (bool, error) {
+	if m.planStale {
+		return false, nil
+	}
+	res, err := m.runner.Run(ctx, aptUpdate())
+	switch {
+	case err == nil:
+		m.listsRefreshed()
+		return true, nil
+	case ctx.Err() != nil:
+		return false, err
+	case errors.Is(err, system.ErrNeedsPassword):
+	case lockHeld(res):
+		m.notify("another program is using apt (%s), so the plan didn't refresh the package lists: packages they don't have are checked before installing", lockMessage(res))
+	default:
+		m.notify("couldn't refresh the package lists for the plan, so packages they don't have are checked before installing: %v", err)
+	}
+	m.planStale = true
+	return false, nil
+}
+
+// aptUpdate is apt-get update, which refreshes apt's package lists.
+func aptUpdate() system.Cmd {
+	return system.Cmd{Name: "apt-get", Args: []string{"update"}, Env: noninteractive, Root: true, Label: "apt-get update"}
+}
+
+// listsRefreshed notes that apt's package lists were just refreshed.
+func (m *Manager) listsRefreshed() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sourcesChanged, m.refreshed = false, m.now()
 }

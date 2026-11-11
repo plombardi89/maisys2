@@ -74,6 +74,9 @@ type Manager struct {
 	lookupMu sync.Mutex
 	found    map[string]lookup
 	upgrades *upgradeList
+	// planStale reports whether the plan couldn't refresh apt's stale
+	// lists, so it doesn't try again.
+	planStale bool
 }
 
 // lookup is what looking a package up found, or why it failed.
@@ -100,7 +103,8 @@ type info struct {
 	// nothing to install for it, as for an apt virtual package.
 	noCandidate bool
 	// unchecked reports whether the repos couldn't be checked, because
-	// apt's lists have never been downloaded.
+	// apt's lists are stale or have never been downloaded, and the plan
+	// couldn't refresh them.
 	unchecked bool
 }
 

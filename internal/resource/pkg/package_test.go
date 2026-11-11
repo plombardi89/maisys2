@@ -357,8 +357,6 @@ func TestCheckHeld(t *testing.T) {
 	}
 }
 
-// TestCheckWithoutLists checks a fresh Ubuntu, which has never downloaded
-// its package lists: names can't be checked during the plan.
 // TestCheckWithoutLists checks a fresh Ubuntu whose package lists were
 // never downloaded, where sudo needs a password: the plan can't refresh
 // them, so names are checked once they're refreshed, before installing.
@@ -377,26 +375,52 @@ func TestCheckWithoutLists(t *testing.T) {
 
 // TestCheckStaleLists checks package lists more than an hour old, such as
 // a WSL image's: names they don't have aren't typos until the lists are
-// refreshed. The plan refreshes them if sudo works without a password,
-// and otherwise leaves the names to be checked before installing.
+// refreshed. The plan refreshes them if it can, straight away, and
+// otherwise leaves the names to be checked before installing: it never
+// fails or waits because of the refresh.
 func TestCheckStaleLists(t *testing.T) {
+	const brokenRepo = "E: The repository 'https://apt.releases.hashicorp.com bogus Release' does not have a Release file.\n"
 	tests := []struct {
 		name    string
 		sudo    system.SudoStatus
+		update  systemtest.Handler
 		refresh bool
 		want    resource.Change
 		wantErr string
+		// wantNote is how the log's notes start.
+		wantNote string
 	}{
 		{
 			name:    "sudo without a password: refreshed, and a typo is caught",
 			sudo:    system.SudoNoPassword,
+			update:  result(0, "", ""),
 			refresh: true,
 			wantErr: "unknown package fsh: the enabled repos don't have it",
 		},
 		{
-			name: "sudo needs a password: checked before installing",
-			sudo: system.SudoNeedsPassword,
-			want: resource.Change{Action: resource.Create, Summary: "install fsh"},
+			name:   "sudo needs a password: checked before installing",
+			sudo:   system.SudoNeedsPassword,
+			update: result(0, "", ""),
+			want:   resource.Change{Action: resource.Create, Summary: "install fsh"},
+		},
+		{
+			name:   "another program is using apt: checked before installing, without waiting",
+			update: result(100, "", aptListsLocked),
+			want:   resource.Change{Action: resource.Create, Summary: "install fsh"},
+			wantNote: "maisys: another program is using apt (E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)), " +
+				"so the plan didn't refresh the package lists: packages they don't have are checked before installing\n",
+		},
+		{
+			name:     "apt-get update fails: checked before installing",
+			update:   result(100, "", brokenRepo),
+			want:     resource.Change{Action: resource.Create, Summary: "install fsh"},
+			wantNote: "maisys: couldn't refresh the package lists for the plan, so packages they don't have are checked before installing: apt-get update failed with exit code 100: E: The repository",
+		},
+		{
+			name:     "sudo is missing: checked before installing",
+			sudo:     system.SudoMissing,
+			want:     resource.Change{Action: resource.Create, Summary: "install fsh"},
+			wantNote: "maisys: couldn't refresh the package lists for the plan, so packages they don't have are checked before installing: apt-get update: ",
 		},
 	}
 	for _, tt := range tests {
@@ -404,18 +428,76 @@ func TestCheckStaleLists(t *testing.T) {
 			s := newTestSystem(t, config.Ubuntu)
 			s.lists(3 * time.Hour)
 			s.runner.SudoStatus = tt.sudo
-			s.on("dpkg-query -W", result(1, "", "dpkg-query: no packages found matching fsh\n"))
-			s.on("apt-get update", result(0, "", ""))
-			s.on("apt-cache policy", result(0, "", ""))
+			s.fakeApt(map[string]string{"jq": "1.7.1-3build1"}, map[string]string{"jq": "1.7.1-3build1"})
+			if tt.update != nil {
+				s.on("apt-get update", tt.update)
+			}
 
 			rs := Set(s.rt, "packages", []string{"fsh"})
 			changes, errs := s.check(rs)
 			wantResults(t, rs, changes, errs, []resource.Change{tt.want}, []string{tt.wantErr})
-			refreshed := slices.Contains(s.runner.RootCommands(), "apt-get update")
-			if refreshed != tt.refresh {
-				t.Errorf("refreshed the lists during the plan: %t, want %t", refreshed, tt.refresh)
+			if !strings.HasPrefix(s.notes.String(), tt.wantNote) || (tt.wantNote == "" && s.notes.Len() > 0) {
+				t.Errorf("notes = %q, want them to start with %q", s.notes.String(), tt.wantNote)
+			}
+			if s.slept != 0 {
+				t.Errorf("waited %s during the plan, want no waiting", s.slept)
+			}
+			// Another lookup, such as a release package's, doesn't try
+			// to refresh the lists again.
+			if _, err := s.m.Installed(t.Context(), "jq"); err != nil {
+				t.Fatal(err)
+			}
+			wantUpdates := 0
+			if tt.update != nil && tt.sudo != system.SudoNeedsPassword {
+				wantUpdates = 1
+			}
+			if got := len(s.commands("dpkg-query", "apt-cache")); got != wantUpdates {
+				t.Errorf("ran %q during the plan, want apt-get update %d times", s.commands("dpkg-query", "apt-cache"), wantUpdates)
+			}
+			fresh := !s.m.listsStale()
+			if fresh != tt.refresh {
+				t.Errorf("lists refreshed during the plan: %t, want %t", fresh, tt.refresh)
 			}
 		})
+	}
+}
+
+// TestCheckStaleListsThenInstall checks stale lists while another program
+// holds apt's lock: the plan leaves them, and they're refreshed before
+// installing, waiting for the lock then.
+func TestCheckStaleListsThenInstall(t *testing.T) {
+	s := newTestSystem(t, config.Ubuntu)
+	s.lists(3 * time.Hour)
+	s.on("dpkg-query -W", result(1, "", "dpkg-query: no packages found matching fsh\n"))
+	s.on("apt-cache policy", result(0, "", ""))
+	updates := 0
+	s.on("apt-get update", func(context.Context, system.Cmd) (system.Result, error) {
+		updates++
+		if updates <= 2 {
+			return system.Result{ExitCode: 100, Stderr: []byte(aptListsLocked)}, nil
+		}
+		return system.Result{}, nil
+	})
+	s.on("apt-get install", result(0, "", ""))
+
+	rs := Set(s.rt, "packages", []string{"fsh"})
+	changes, errs := s.check(rs)
+	wantResults(t, rs, changes, errs, []resource.Change{{Action: resource.Create, Summary: "install fsh"}}, []string{""})
+	if updates != 1 || s.slept != 0 {
+		t.Fatalf("the plan ran apt-get update %d times, waiting %s; want once, without waiting", updates, s.slept)
+	}
+
+	p, ok := rs[0].(*Package)
+	if !ok {
+		t.Fatalf("%s isn't a *Package", rs[0].ID())
+	}
+	out := p.ApplyGroup(t.Context(), s.rt, []resource.Member{{Module: "packages", Resource: p}})
+	if out[0].Err != nil {
+		t.Fatal(out[0].Err)
+	}
+	want := []string{"apt-get update", "apt-get update", "apt-get update", aptInstall + " fsh"}
+	if got := s.runner.RootCommands(); !slices.Equal(got, want) || s.slept != lockRetry {
+		t.Errorf("commands run as root = %q after waiting %s, want %q after waiting %s", got, s.slept, want, lockRetry)
 	}
 }
 
