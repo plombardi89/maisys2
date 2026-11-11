@@ -25,7 +25,7 @@ maisys reads everything it does from a config repo in git: a `machines/` file fo
 maisys config init
 ```
 
-This creates `~/maisys-config` with a machine file for this machine and every module listed, commented out, in `profiles/base.toml`. Then:
+This creates `~/maisys-config` with a machine file for this machine and every module listed, commented out, in `profiles/base.toml`, and makes it this machine's config. On a machine that already syncs from another config repo, that setting is left alone until you switch with `maisys sync --dir ~/maisys-config`. Then:
 
 - `maisys config` shows this machine's merged config, and `maisys config --explain` shows which file set each value.
 - `maisys config validate` checks it, and `maisys config validate --all` checks every machine (the repo's own CI runs this). They also report keys maisys doesn't know, such as typos, which other commands ignore so that a config written for a newer maisys still works.

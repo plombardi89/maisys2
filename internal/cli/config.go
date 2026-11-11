@@ -70,8 +70,10 @@ func newConfigInitCommand(g *globalOptions) *cobra.Command {
 		Use:   "init [DIR]",
 		Short: "Create a new config repo",
 		Long: `Create a starter config repo in DIR (default ~/maisys-config), with a machine
-file for this machine, commit it with git, and save it as the config for
-this machine. DIR must be empty or not exist yet.
+file for this machine, and commit it with git. DIR must be empty or not
+exist yet. If this machine isn't set up for maisys yet, the new repo
+becomes its config. Otherwise the local settings are left as they are, and
+"maisys sync --dir DIR" switches to the new repo.
 
 The machine is named after --machine, or else MAISYS_MACHINE, or else the
 hostname. Its machine file declares this system's os and os_version. Every

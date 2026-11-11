@@ -213,11 +213,11 @@ func TestConfigInit(t *testing.T) {
 			}
 			for _, want := range []string{
 				"maisys: created a config repo in " + dir + " for " + tt.machine + " (",
-				"\nmaisys: committed them with git (\"Start a maisys config\")\n",
-				"\nmaisys: saved it as this machine's config in " + e.settingsFile() + "\n",
+				"\nmaisys: committed them with git (\"Start a maisys config\")\n" +
+					"maisys: saved it as this machine's config in " + e.settingsFile() + "\n",
 				"\nNext:\n",
-				"maisys config validate\n",
-				"maisys sync --dry-run\n",
+				"  - Check the config: maisys config validate\n",
+				"  - See what a sync would change: maisys sync --dry-run\n",
 				"remote add origin URL\n",
 			} {
 				if !strings.Contains(stdout, want) {
@@ -496,30 +496,70 @@ func listFiles(t *testing.T, dir string) []string {
 	return files
 }
 
-func TestConfigInitReplacesSettings(t *testing.T) {
-	git := newGitSandbox(t)
-	e := newTestEnv(t)
-	e.system = fedoraSystem
-	oldDir := exampleRepo(t, nil)
-	e.saveSettings(settings.Settings{RepoDir: oldDir, RepoURL: "https://example.com/old.git", Machine: "phil-workp14s"})
-	dir := filepath.Join(t.TempDir(), "cfg")
+// TestConfigInitKeepsSettings checks that config init leaves the local
+// settings of a machine that's already set up alone, and says how to
+// switch, so the sync that does says what it's switching from.
+func TestConfigInitKeepsSettings(t *testing.T) {
+	tests := []struct {
+		name  string
+		saved settings.Settings // %o is the old repo's folder
+		want  string            // %f is the settings file, %d the new repo's folder
+	}{
+		{
+			name:  "another machine name, and a URL with a token",
+			saved: settings.Settings{RepoDir: "%o", RepoURL: "https://me:secret@example.com/old.git", Machine: "phil-workp14s"},
+			want:  "maisys: this machine is set up with the config repo https://xxxxx@example.com/old.git; to switch to the new one, run: maisys sync --dir %d --machine fedora-box\n",
+		},
+		{
+			name:  "the same machine name, and a repo without a remote",
+			saved: settings.Settings{RepoDir: "%o", Machine: "fedora-box"},
+			want:  "maisys: this machine is set up with the config repo %o; to switch to the new one, run: maisys sync --dir %d\n",
+		},
+		{
+			name:  "settings without a config repo",
+			saved: settings.Settings{Machine: "fedora-box"},
+			want:  "maisys: this machine already has local settings, in %f; to switch to the new config repo, run: maisys sync --dir %d\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			git := newGitSandbox(t)
+			e := newTestEnv(t)
+			e.system = fedoraSystem
+			oldDir := exampleRepo(t, nil)
+			saved := tt.saved
+			saved.RepoDir = strings.ReplaceAll(saved.RepoDir, "%o", oldDir)
+			e.saveSettings(saved)
+			before, err := os.ReadFile(e.settingsFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(t.TempDir(), "my cfg")
 
-	code, stdout, stderr := e.runGit(git, "config", "init", dir)
-	if code != exitOK {
-		t.Fatalf("exit code = %d, want %d; stderr:\n%s", code, exitOK, stderr)
-	}
-	want := "maisys: replaced the local settings in " + e.settingsFile() + "\n" +
-		"maisys: this machine now uses " + dir + " (was " + oldDir + ")\n" +
-		"maisys: this machine is now fedora-box (was phil-workp14s)\n"
-	if !strings.Contains(stdout, want) {
-		t.Errorf("stdout doesn't contain:\n%s\nstdout:\n%s", want, stdout)
-	}
-	s, err := settings.Load(e.settingsFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.RepoDir != dir || s.RepoURL != "" || s.Machine != "fedora-box" {
-		t.Errorf("settings = %+v, want the new repo, without a URL, and machine fedora-box", *s)
+			code, stdout, stderr := e.runGit(git, "config", "init", dir)
+			if code != exitOK {
+				t.Fatalf("exit code = %d, want %d; stderr:\n%s", code, exitOK, stderr)
+			}
+			want := strings.NewReplacer("%o", oldDir, "%f", e.settingsFile(), "%d", quoteArg(dir)).Replace(tt.want)
+			switchCmd := strings.TrimSuffix(want[strings.Index(want, "run: ")+len("run: "):], "\n")
+			for _, want := range []string{
+				"\nmaisys: committed them with git (\"Start a maisys config\")\n" + want,
+				"  - Check the config: in " + quoteArg(dir) + ", run maisys config validate --all\n",
+				"  - Switch this machine to it: " + switchCmd + "\n",
+			} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("stdout doesn't contain:\n%s\nstdout:\n%s", want, stdout)
+				}
+			}
+			for _, unwanted := range []string{"secret", "saved it", "sync --dry-run"} {
+				if strings.Contains(stdout, unwanted) {
+					t.Errorf("stdout contains %q:\n%s", unwanted, stdout)
+				}
+			}
+			if after, err := os.ReadFile(e.settingsFile()); err != nil || !bytes.Equal(after, before) {
+				t.Errorf("the local settings changed:\n%s\nwant them as they were:\n%s", after, before)
+			}
+		})
 	}
 }
 

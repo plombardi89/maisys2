@@ -34,9 +34,11 @@ type initOptions struct {
 }
 
 // initConfig creates a starter config repo with a machine file for this
-// machine, commits it, and saves it in the local settings as this
-// machine's config. With a remote, it pushes the repo there too.
-// Everything that can fail is checked before anything is written.
+// machine, and commits it. If this machine has no local settings yet, it
+// saves the repo in them as this machine's config; otherwise it leaves
+// them as they are, and says how to switch to the new repo. With a remote,
+// it pushes the repo there too. Everything that can fail is checked before
+// anything is written.
 func initConfig(cmd *cobra.Command, g *globalOptions, opts initOptions) error {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
@@ -122,11 +124,26 @@ func initConfig(cmd *cobra.Command, g *globalOptions, opts initOptions) error {
 	}
 	_, _ = fmt.Fprintf(out, "maisys: committed them with git (%q)\n", initCommitMessage)
 
-	saved := &settings.Settings{RepoDir: dir, RepoURL: opts.remote, Machine: name}
-	if err := saved.Save(settingsFile); err != nil {
-		return fmt.Errorf("%w\nThe config repo is committed in %s", err, dir)
+	// A machine that's already set up keeps its config repo until a sync
+	// switches to the new one, so that sync says what it's switching from.
+	var switchCmd string
+	if old == nil {
+		saved := &settings.Settings{RepoDir: dir, RepoURL: opts.remote, Machine: name}
+		if err := saved.Save(settingsFile); err != nil {
+			return fmt.Errorf("%w\nThe config repo is committed in %s", err, dir)
+		}
+		_, _ = fmt.Fprintf(out, "maisys: saved it as this machine's config in %s\n", settingsFile)
+	} else {
+		switchCmd = "maisys sync --dir " + quoteArg(dir)
+		if old.Machine != name {
+			switchCmd += " --machine " + name
+		}
+		if current := describeRepo(old.RepoURL, old.RepoDir); current != "" {
+			_, _ = fmt.Fprintf(out, "maisys: this machine is set up with the config repo %s; to switch to the new one, run: %s\n", current, switchCmd)
+		} else {
+			_, _ = fmt.Fprintf(out, "maisys: this machine already has local settings, in %s; to switch to the new config repo, run: %s\n", settingsFile, switchCmd)
+		}
 	}
-	reportSettings(out, settingsFile, old, saved)
 
 	var pushErr error
 	if opts.remote != "" {
@@ -135,7 +152,7 @@ func initConfig(cmd *cobra.Command, g *globalOptions, opts initOptions) error {
 			_, _ = fmt.Fprintln(out, "maisys: pushed it to origin")
 		}
 	}
-	printNextSteps(out, dir, s, opts.remote != "")
+	printNextSteps(out, dir, s, opts.remote != "", switchCmd)
 	return pushErr
 }
 
@@ -277,22 +294,6 @@ func writeScaffold(dir string, files map[string]string) error {
 	return nil
 }
 
-// reportSettings says what changed in the local settings, saved in file,
-// from old (nil if there were none) to saved.
-func reportSettings(out io.Writer, file string, old, saved *settings.Settings) {
-	if old == nil {
-		_, _ = fmt.Fprintf(out, "maisys: saved it as this machine's config in %s\n", file)
-		return
-	}
-	_, _ = fmt.Fprintf(out, "maisys: replaced the local settings in %s\n", file)
-	if old.RepoDir != "" && !sameDir(old.RepoDir, saved.RepoDir) {
-		_, _ = fmt.Fprintf(out, "maisys: this machine now uses %s (was %s)\n", saved.RepoDir, old.RepoDir)
-	}
-	if old.Machine != "" && old.Machine != saved.Machine {
-		_, _ = fmt.Fprintf(out, "maisys: this machine is now %s (was %s)\n", saved.Machine, old.Machine)
-	}
-}
-
 // pushScaffold sets url as the repo's origin and pushes to it.
 func pushScaffold(cmd *cobra.Command, repo *gitrepo.Repo, url string) error {
 	err := repo.SetRemote(cmd.Context(), url)
@@ -306,11 +307,20 @@ func pushScaffold(cmd *cobra.Command, repo *gitrepo.Repo, url string) error {
 }
 
 // printNextSteps says what to do with a new config repo in dir, which has a
-// remote if hasRemote is set.
-func printNextSteps(out io.Writer, dir string, s *config.Scaffold, hasRemote bool) {
+// remote if hasRemote is set. switchCmd is the command that makes it this
+// machine's config, if config init didn't, or else "".
+func printNextSteps(out io.Writer, dir string, s *config.Scaffold, hasRemote bool, switchCmd string) {
 	edit := fmt.Sprintf("in profiles/base.toml,\n    and list the packages you want in profiles/%s.toml", s.OS)
 	if s.OS == config.Windows {
 		edit = fmt.Sprintf("in profiles/windows.toml,\n    and for the WSL distro %s, in profiles/base.toml and profiles/ubuntu.toml", config.ScaffoldDistro)
+	}
+	check, try := "maisys config validate", "See what a sync would change: maisys sync --dry-run"
+	if switchCmd != "" {
+		// Outside the new repo, maisys reads the one in the local settings;
+		// inside it, the machine in the local settings may not be one of
+		// its machines.
+		check = "in " + quoteArg(dir) + ", run maisys config validate --all"
+		try = "Switch this machine to it: " + switchCmd
 	}
 	commit := "Commit your changes with git, and push them."
 	if !hasRemote {
@@ -319,10 +329,10 @@ func printNextSteps(out io.Writer, dir string, s *config.Scaffold, hasRemote boo
 	_, _ = fmt.Fprintf(out, `
 Next:
   - Edit the files: turn on the modules you want %s.
-  - Check the config: maisys config validate
-  - See what a sync would change: maisys sync --dry-run
+  - Check the config: %s
   - %s
-`, edit, commit)
+  - %s
+`, edit, check, try, commit)
 	if hasRemote {
 		return
 	}
