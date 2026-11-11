@@ -309,6 +309,73 @@ func TestUnpackLinks(t *testing.T) {
 	}
 }
 
+func TestUnpackLinkChains(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("tools with symlinks are only unpacked on Linux")
+	}
+	tests := []struct {
+		name    string
+		entries []entry
+		wantErr string // "" means it unpacks
+	}{
+		{
+			name: "out of the folder through another link",
+			entries: []entry{
+				{name: "tool/a", body: ".", mode: fs.ModeSymlink},
+				{name: "tool/b", body: "a/..", mode: fs.ModeSymlink},
+			},
+			wantErr: `b: links to "a/..", which leaves the archive's folder`,
+		},
+		{
+			name: "out of the folder through a chain",
+			entries: []entry{
+				{name: "tool/sub/", mode: fs.ModeDir | 0o755},
+				{name: "tool/sub/up", body: "..", mode: fs.ModeSymlink},
+				{name: "tool/top", body: "sub/up", mode: fs.ModeSymlink},
+				{name: "tool/escape", body: "top/sub/up/..", mode: fs.ModeSymlink},
+			},
+			wantErr: `escape: links to "top/sub/up/..", which leaves the archive's folder`,
+		},
+		{
+			name: "inside through other links",
+			entries: []entry{
+				{name: "tool/lib/libjvm.so", body: "jvm", mode: 0o644},
+				{name: "tool/current", body: "lib", mode: fs.ModeSymlink},
+				{name: "tool/jvm", body: "current/../lib/libjvm.so", mode: fs.ModeSymlink},
+			},
+		},
+		{
+			name:    "to nothing",
+			entries: []entry{{name: "tool/dangling", body: "missing/file", mode: fs.ModeSymlink}},
+		},
+	}
+	for _, tt := range tests {
+		for _, format := range []Format{TarGz, Zip} {
+			t.Run(tt.name+" "+format.String(), func(t *testing.T) {
+				data := tarGz(t, tt.entries)
+				if format == Zip {
+					data = zipFile(t, tt.entries)
+				}
+				src := writeTemp(t, "tool."+format.String(), data)
+				parent := t.TempDir()
+				err := Archive{Format: format, Strip: 1}.Unpack(src, filepath.Join(parent, "1.0.0"))
+				if tt.wantErr == "" {
+					if err != nil {
+						t.Fatalf("Unpack() error = %v", err)
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Unpack() error = %v, want one containing %q", err, tt.wantErr)
+				}
+				if entries, _ := os.ReadDir(parent); len(entries) != 0 {
+					t.Errorf("Unpack() left %v behind", entries)
+				}
+			})
+		}
+	}
+}
+
 func TestUnpackRejects(t *testing.T) {
 	tests := []struct {
 		name    string
