@@ -155,14 +155,19 @@ func (x *extractor) tarGz(src string) error {
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			err = x.root.MkdirAll(rel, 0o755)
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeGNUSparse, tar.TypeCont:
+			// The reader fills in a sparse file's holes, and contiguous
+			// files are regular ones to everything but a few old systems.
 			err = x.write(rel, tr, hdr.FileInfo().Mode())
 		case tar.TypeSymlink:
 			err = x.symlink(rel, hdr.Linkname)
 		case tar.TypeLink:
 			err = x.hardlink(rel, hdr.Linkname)
+		case tar.TypeXGlobalHeader, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			// Global pax headers hold nothing to unpack, and devices and
+			// FIFOs have no place in a tool.
 		default:
-			// Devices, FIFOs and pax headers have no place in a tool.
+			err = fmt.Errorf("is a kind of entry maisys can't unpack (type %q)", hdr.Typeflag)
 		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", hdr.Name, err)

@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -20,6 +22,9 @@ type entry struct {
 	body string
 	mode fs.FileMode // fs.ModeDir for a folder, fs.ModeSymlink for a symlink to body
 	link string      // for a hard link, the entry it links to
+	// typeflag, if set, is the tar entry's type, holding body if it's one
+	// with contents.
+	typeflag byte
 }
 
 func tarGz(t *testing.T, entries []entry) []byte {
@@ -30,6 +35,8 @@ func tarGz(t *testing.T, entries []entry) []byte {
 	for _, e := range entries {
 		hdr := &tar.Header{Name: e.name, Mode: int64(e.mode.Perm())}
 		switch {
+		case e.typeflag != 0:
+			hdr.Typeflag, hdr.Size = e.typeflag, int64(len(e.body))
 		case e.link != "":
 			hdr.Typeflag, hdr.Linkname = tar.TypeLink, e.link
 		case e.mode&fs.ModeDir != 0:
@@ -42,7 +49,7 @@ func tarGz(t *testing.T, entries []entry) []byte {
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatal(err)
 		}
-		if hdr.Typeflag == tar.TypeReg {
+		if hdr.Size > 0 {
 			if _, err := tw.Write([]byte(e.body)); err != nil {
 				t.Fatal(err)
 			}
@@ -376,6 +383,72 @@ func TestUnpackLinkChains(t *testing.T) {
 	}
 }
 
+// makeSparse turns blk, the GNU tar header of a regular file holding n
+// bytes, into the header of an old GNU sparse file of size bytes: the n
+// bytes, then a hole.
+func makeSparse(blk []byte, n, size int) {
+	blk[156] = tar.TypeGNUSparse
+	copy(blk[386:], fmt.Sprintf("%011o\x00%011o\x00", 0, n)) // the first part: n bytes at 0
+	copy(blk[483:], fmt.Sprintf("%011o\x00", size))          // the file's size
+	copy(blk[148:156], "        ")
+	sum := 0
+	for _, b := range blk {
+		sum += int(b)
+	}
+	copy(blk[148:], fmt.Sprintf("%06o\x00 ", sum))
+}
+
+// TestUnpackTarTypes checks the kinds of tar entries other than files,
+// folders and links: GNU sparse files and contiguous files are files, and
+// the rest is skipped.
+func TestUnpackTarTypes(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	entries := []struct {
+		hdr  tar.Header
+		body string
+	}{
+		// A regular file until makeSparse makes it a sparse one.
+		{hdr: tar.Header{Typeflag: tar.TypeReg, Name: "tool/sparse", Mode: 0o644, Size: 6, Format: tar.FormatGNU}, body: "sparse"},
+		{hdr: tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "0123abc"}}},
+		{hdr: tar.Header{Typeflag: tar.TypeCont, Name: "tool/contiguous", Mode: 0o644, Size: 10}, body: "contiguous"},
+		{hdr: tar.Header{Typeflag: tar.TypeFifo, Name: "tool/fifo", Mode: 0o644}},
+		{hdr: tar.Header{Typeflag: tar.TypeChar, Name: "tool/null", Mode: 0o644, Devmajor: 1, Devminor: 3}},
+		{hdr: tar.Header{Typeflag: tar.TypeBlock, Name: "tool/sda", Mode: 0o644, Devmajor: 8}},
+		{hdr: tar.Header{Typeflag: tar.TypeReg, Name: "tool/bin/tool", Mode: 0o755, Size: 7}, body: "program"},
+	}
+	for _, e := range entries {
+		if err := tw.WriteHeader(&e.hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(tw, e.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	makeSparse(buf.Bytes()[:512], 6, 16)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	if _, err := zw.Write(buf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	src := writeTemp(t, "tool.tar.gz", gz.Bytes())
+	dir := filepath.Join(t.TempDir(), "1.0.0")
+	if err := (Archive{Format: TarGz, Strip: 1}).Unpack(src, dir); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bin/", "bin/tool: program", "contiguous: contiguous", "sparse: sparse" + strings.Repeat("\x00", 10)}
+	if got := tree(t, dir); !slices.Equal(got, want) {
+		t.Errorf("unpacked %q, want %q", got, want)
+	}
+}
+
 func TestUnpackRejects(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -433,6 +506,12 @@ func TestUnpackRejects(t *testing.T) {
 			format:  TarGz,
 			entries: []entry{{name: "tool", body: "x", mode: 0o644}, {name: "tool", body: "y", mode: 0o644}},
 			wantErr: "tool: ",
+		},
+		{
+			name:    "an unknown kind of tar entry",
+			format:  TarGz,
+			entries: []entry{{name: "tool/dump", body: "Ybin\x00", typeflag: 'D'}},
+			wantErr: "tool/dump: is a kind of entry maisys can't unpack (type 'D')",
 		},
 		{
 			name:    "not an archive",
