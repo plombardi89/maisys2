@@ -46,6 +46,24 @@ key = 1
 	}
 }
 
+// TestReadMarkerNewerConfig checks that a config_version newer than this
+// maisys reads is reported before the keys and values it may have that
+// this maisys doesn't know.
+func TestReadMarkerNewerConfig(t *testing.T) {
+	const want = "maisys.toml:1:18: config_version 2 needs a newer maisys: this one reads config_version 1; update maisys"
+	for _, doc := range []string{
+		"config_version = 2\nmirror = \"https://example.com\"\n",
+		"config_version = 2\nrequires = { maisys = \">= 3\" }\n",
+	} {
+		for _, strict := range []bool{false, true} {
+			_, err := (&config.Repo{FS: fstest.MapFS{"maisys.toml": file(doc)}, Strict: strict}).ReadMarker()
+			if err == nil || err.Error() != want {
+				t.Errorf("strict %v, %q: error = %v, want %s", strict, doc, err, want)
+			}
+		}
+	}
+}
+
 func TestReadMarkerErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -218,15 +236,17 @@ func TestMarkerCheck(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mk, err := readMarker(t, tt.doc)
-			if err != nil {
-				t.Fatal(err)
-			}
 			current := tt.current
 			if current == 0 {
 				current = config.ConfigVersion
 			}
-			warnings, err := config.CheckMarker(mk, tt.version, current)
+			// ReadMarker reports a newer config_version itself; Check
+			// reports everything else.
+			mk, err := config.ReadMarkerFor(&config.Repo{FS: fstest.MapFS{"maisys.toml": file(tt.doc)}}, current)
+			var warnings []string
+			if err == nil {
+				warnings, err = config.CheckMarker(mk, tt.version, current)
+			}
 
 			switch {
 			case tt.err == "" && err != nil:

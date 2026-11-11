@@ -195,6 +195,13 @@ func TestConfigRepoMarker(t *testing.T) {
 				"maisys: 1 problem found\n",
 		},
 		{
+			name:   "a newer config_version, with a key this maisys doesn't know",
+			marker: "config_version = 2\nmirror = \"https://example.com\"\n",
+			code:   exitError,
+			stderr: "maisys.toml:1:18: config_version 2 needs a newer maisys: this one reads config_version 1; update maisys\n" +
+				"maisys: 1 problem found\n",
+		},
+		{
 			name:   "an unknown key",
 			marker: "config_version = 1\nmirror = \"https://example.com\"\n",
 			code:   exitError,

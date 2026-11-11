@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/mod/semver"
 )
 
@@ -34,13 +35,24 @@ type Marker struct {
 	locs *locations
 }
 
-// ReadMarker reads the repo's maisys.toml.
+// ReadMarker reads the repo's maisys.toml. A config_version newer than
+// this maisys reads is reported before anything else, since the file may
+// then have keys and values this maisys doesn't know.
 func (r *Repo) ReadMarker() (*Marker, error) {
+	return r.readMarker(ConfigVersion)
+}
+
+// readMarker is ReadMarker for a maisys whose current config_version is
+// current.
+func (r *Repo) readMarker(current int) (*Marker, error) {
 	data, err := fs.ReadFile(r.FS, markerFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%s doesn't exist, so %w", markerFile, ErrNotConfigRepo)
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := newerConfig(data, current); err != nil {
 		return nil, err
 	}
 	mk := &Marker{}
@@ -53,6 +65,34 @@ func (r *Repo) ReadMarker() (*Marker, error) {
 	}
 	mk.locs = locate(data)
 	return mk, nil
+}
+
+// newerConfig returns an error if data, the contents of maisys.toml, sets
+// a config_version newer than current, the one this maisys reads. It
+// leaves any other problem to decoding.
+func newerConfig(data []byte, current int) error {
+	var keys map[string]any
+	if err := toml.Unmarshal(data, &keys); err == nil {
+		if v, ok := keys["config_version"].(int64); ok && v > int64(current) {
+			return tooNew(locate(data).where(markerFile, "config_version"), v, current)
+		}
+	}
+	return nil
+}
+
+// tooNew is the error for config_version v, set at at, which a maisys
+// whose current config_version is current can't read.
+func tooNew(at string, v int64, current int) error {
+	return fmt.Errorf("%s: config_version %d needs a newer maisys: this one reads config_version %s; update maisys", at, v, reads(current))
+}
+
+// reads describes the config_versions a maisys whose current
+// config_version is current reads, such as "2 and 3".
+func reads(current int) string {
+	if oldest := max(current-1, 1); oldest < current {
+		return fmt.Sprintf("%d and %d", oldest, current)
+	}
+	return fmt.Sprint(current)
 }
 
 // Check checks that this maisys, whose version is maisysVersion, can read
@@ -69,17 +109,13 @@ func (mk *Marker) check(maisysVersion string, current int) ([]string, error) {
 	var errs []error
 	at := mk.locs.where(markerFile, "config_version")
 	oldest := max(current-1, 1)
-	reads := fmt.Sprint(current)
-	if oldest < current {
-		reads = fmt.Sprintf("%d and %d", oldest, current)
-	}
 	switch v := mk.ConfigVersion; {
 	case v < 1:
 		errs = append(errs, fmt.Errorf("%s: config_version must be 1 or more, not %d", at, v))
 	case v > current:
-		errs = append(errs, fmt.Errorf("%s: config_version %d needs a newer maisys: this one reads config_version %s; update maisys", at, v, reads))
+		errs = append(errs, tooNew(at, int64(v), current))
 	case v < oldest:
-		errs = append(errs, fmt.Errorf("%s: config_version %d is too old for this maisys, which reads config_version %s: migrate the config (the release notes say how)", at, v, reads))
+		errs = append(errs, fmt.Errorf("%s: config_version %d is too old for this maisys, which reads config_version %s: migrate the config (the release notes say how)", at, v, reads(current)))
 	case v < current:
 		warnings = append(warnings, fmt.Sprintf("%s: config_version %d is the previous version: migrate the config to config_version %d (the release notes say how)", at, v, current))
 	default:
