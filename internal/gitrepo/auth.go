@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -28,6 +29,10 @@ type Auth struct {
 	// Prompt asks for a read-only access token for url. It's nil when
 	// there's no terminal to ask in.
 	Prompt func(ctx context.Context, url string) (string, error)
+	// PromptOut is where Prompt asks. Before Prompt asks for a token in
+	// place of a saved one that stopped working, maisys says so there. It
+	// may be nil.
+	PromptOut io.Writer
 }
 
 // tokenKind describes the token maisys needs.
@@ -257,6 +262,9 @@ func otherAuthError(rawURL string, ge *gitError) error {
 	return fmt.Errorf("%w to %s (%s).\n%s", ErrAuth, Redact(rawURL), ge.message(), fix)
 }
 
+// localHint says how to sync without pulling the config repo.
+const localHint = `Run "maisys sync --local" to carry on with the copy you already have`
+
 // pullAuthError is the error for a pull that couldn't sign in, usually
 // because the credentials have expired.
 func (r *Repo) pullAuthError(ctx context.Context, rawURL string, ge *gitError, withToken bool) error {
@@ -268,13 +276,13 @@ func (r *Repo) pullAuthError(ctx context.Context, rawURL string, ge *gitError, w
 		fix = "Check that your SSH key is loaded (ssh-add -l lists them) and can still read the repo."
 	default:
 		if file := r.credentialsFile(ctx); file != "" {
-			fix = "The token saved in " + file + " was rejected: it may have expired or been revoked. Create a new read-only access token (" + tokenKind + ") and set MAISYS_CONFIG_TOKEN to it."
+			fix = "The token saved in " + file + " was rejected: it may have expired or been revoked. Run \"maisys sync\" in a terminal to enter a new read-only access token (" + tokenKind + "), or, for automated runs, set MAISYS_CONFIG_TOKEN to one."
 		} else {
 			fix = "The saved credentials may have expired. Sign in again with your git credential helper, or set MAISYS_CONFIG_TOKEN to a read-only access token (" + tokenKind + ")."
 		}
 	}
-	return fmt.Errorf("%w to %s to pull the config repo (%s).\n%s\nRun \"maisys sync --local\" to carry on with the copy you already have",
-		ErrAuth, Redact(rawURL), ge.message(), fix)
+	return fmt.Errorf("%w to %s to pull the config repo (%s).\n%s\n%s",
+		ErrAuth, Redact(rawURL), ge.message(), fix, localHint)
 }
 
 func isHTTPS(rawURL string) bool {

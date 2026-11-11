@@ -129,8 +129,9 @@ func TestCloneWithToken(t *testing.T) {
 	assertContent(t, filepath.Join(dir, "base.toml"), "[packages]\n")
 	assertTokenNotSaved(t, testToken, sb.home, dir)
 
-	// Without the token, the clone can't sign in: nothing kept it.
-	r.Auth = Auth{}
+	// Without the token, the clone can't sign in: nothing kept it. It isn't
+	// set up with a saved token, so there's none to replace.
+	r.Auth = Auth{Prompt: noPrompt(t)}
 	if err := r.Pull(t.Context()); !errors.Is(err, ErrAuth) {
 		t.Errorf("Pull() without the token: error = %v, want ErrAuth", err)
 	}
@@ -184,20 +185,103 @@ func TestPullWithExpiredToken(t *testing.T) {
 	sb := newSandbox(t)
 	srv := newGitServer(t, sb)
 	r, _ := cloneWithPrompt(t, sb, srv)
-	r.Auth.Prompt = noPrompt(t)
 	srv.setToken("new-token")
 
+	// Without a terminal, there's no asking for a new token.
+	r.Auth.Prompt = nil
 	err := r.Pull(t.Context())
 	if !errors.Is(err, ErrAuth) {
 		t.Fatalf("Pull() error = %v, want ErrAuth", err)
 	}
-	assertErrorContains(t, err, "to pull the config repo", "token saved in "+sb.credentialsFile(),
-		"MAISYS_CONFIG_TOKEN", `"maisys sync --local"`)
+	assertErrorContains(t, err, "to pull the config repo", "The token saved in "+sb.credentialsFile()+" was rejected",
+		`Run "maisys sync" in a terminal to enter a new read-only access token`, "for automated runs, set MAISYS_CONFIG_TOKEN",
+		`"maisys sync --local"`)
+
+	// A rejected MAISYS_CONFIG_TOKEN is an error, even with a terminal.
+	r.Auth.Token, r.Auth.Prompt = "wrong", noPrompt(t)
+	err = r.Pull(t.Context())
+	if !errors.Is(err, ErrAuth) {
+		t.Fatalf("Pull() with a wrong MAISYS_CONFIG_TOKEN: error = %v, want ErrAuth", err)
+	}
+	assertErrorContains(t, err, "The token in MAISYS_CONFIG_TOKEN was rejected", `"maisys sync --local"`)
 
 	// MAISYS_CONFIG_TOKEN takes the place of the saved token.
 	r.Auth.Token = "new-token"
 	if err := r.Pull(t.Context()); err != nil {
 		t.Errorf("Pull() with a new MAISYS_CONFIG_TOKEN: %v", err)
+	}
+}
+
+func TestPullAsksForNewToken(t *testing.T) {
+	tests := []struct {
+		name      string
+		answer    string
+		answerErr error
+		auth      bool     // the error wraps ErrAuth
+		want      []string // in the error; none if the pull works
+	}{
+		{name: "a new token", answer: "new-token"},
+		{
+			name:   "a wrong token",
+			answer: "wrong",
+			auth:   true,
+			want:   []string{"with that token", "needs read access", "Contents: read", `"maisys sync --local"`},
+		},
+		{
+			name:      "nothing typed",
+			answerErr: errors.New("no token entered"),
+			want:      []string{"couldn't pull the config repo", "no token entered"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			srv := newGitServer(t, sb)
+			r, _ := cloneWithPrompt(t, sb, srv)
+			upstream := filepath.Join(srv.root, "config.git")
+			sb.commitUpstream(upstream, "base.toml", "[packages]\n")
+			srv.setToken("new-token")
+			p := &prompt{answer: tt.answer, err: tt.answerErr}
+			var out bytes.Buffer
+			r.Auth.Prompt, r.Auth.PromptOut = p.ask, &out
+
+			err := r.Pull(t.Context())
+			if want := []string{srv.privateURL("config.git")}; !slices.Equal(p.urls, want) {
+				t.Errorf("asked for a token for %q, want %q", p.urls, want)
+			}
+			want := "The token saved in " + sb.credentialsFile() + " for " + srv.privateURL("config.git") + " was rejected: it may have expired or been revoked.\n"
+			if out.String() != want {
+				t.Errorf("the prompt's output = %q, want %q", out.String(), want)
+			}
+			if len(tt.want) > 0 {
+				assertErrorContains(t, err, tt.want...)
+				if errors.Is(err, ErrAuth) != tt.auth {
+					t.Errorf("errors.Is(err, ErrAuth) = %v, want %v", !tt.auth, tt.auth)
+				}
+				assertNotExist(t, filepath.Join(r.Dir, "base.toml"))
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertContent(t, filepath.Join(r.Dir, "base.toml"), "[packages]\n")
+
+			// The new token took the old one's place, so later pulls
+			// sign in with it without asking.
+			data, err := os.ReadFile(sb.credentialsFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lines := strings.Fields(string(data)); len(lines) != 1 || !strings.Contains(lines[0], ":new-token@") {
+				t.Errorf("%s contains %q, want the new token only", sb.credentialsFile(), data)
+			}
+			sb.commitUpstream(upstream, "fedora.toml", "")
+			r.Auth.Prompt = noPrompt(t)
+			if err := r.Pull(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertContent(t, filepath.Join(r.Dir, "fedora.toml"), "")
+		})
 	}
 }
 

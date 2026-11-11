@@ -250,7 +250,9 @@ func (r *Repo) Head(ctx context.Context) (string, error) {
 
 // Pull fast-forwards the clone to its upstream branch. It fails with
 // ErrNoFastForward if that would need a merge, and with ErrAuth if git can't
-// sign in, for example because the saved token has expired.
+// sign in, for example because the saved token has expired. If a token
+// typed at the prompt was saved for the clone, and it's rejected, Pull asks
+// r.Auth.Prompt for a new one, saves it in its place and tries again.
 func (r *Repo) Pull(ctx context.Context) error {
 	url, err := r.RemoteURL(ctx)
 	if err != nil {
@@ -271,6 +273,41 @@ func (r *Repo) Pull(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
+	if ge, ok := errors.AsType[*gitError](err); ok && authFailed(ge.stderr) && !withToken && isHTTPS(url) && r.Auth.Prompt != nil {
+		if file := r.credentialsFile(ctx); file != "" {
+			return r.pullWithNewToken(ctx, url, file, c)
+		}
+	}
+	return r.pullError(ctx, url, err, withToken)
+}
+
+// pullWithNewToken asks for a token in place of the one saved in file,
+// which the clone signs in with and which was rejected, saves it, and pulls
+// again with c.
+func (r *Repo) pullWithNewToken(ctx context.Context, url, file string, c call) error {
+	shown := Redact(url)
+	if r.Auth.PromptOut != nil {
+		_, _ = fmt.Fprintf(r.Auth.PromptOut, "The token saved in %s for %s was rejected: it may have expired or been revoked.\n", file, shown)
+	}
+	token, err := r.Auth.Prompt(ctx, shown)
+	if err != nil {
+		return fmt.Errorf("couldn't pull the config repo in %s: %w", r.Dir, err)
+	}
+	if err := SaveToken(file, url, token); err != nil {
+		return err
+	}
+	_, err = r.run(ctx, c)
+	if err == nil {
+		return nil
+	}
+	if ge, ok := errors.AsType[*gitError](err); ok && (authFailed(ge.stderr) || repoNotFound(ge.stderr)) {
+		return fmt.Errorf("%w\n%s", tokenRejected(ge.message(), shown, "that token"), localHint)
+	}
+	return r.pullError(ctx, url, err, false)
+}
+
+// pullError explains a failed pull.
+func (r *Repo) pullError(ctx context.Context, url string, err error, withToken bool) error {
 	ge, ok := errors.AsType[*gitError](err)
 	switch {
 	case !ok:

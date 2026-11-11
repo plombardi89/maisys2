@@ -29,6 +29,8 @@ func (g *globalOptions) gitOptions(paths settings.Paths) (gitrepo.Options, error
 			Token:           g.getenv(configTokenEnv),
 			CredentialsFile: paths.CredentialsFile(),
 			Prompt:          g.prompt,
+			// The prompt asks on stdout (see Execute).
+			PromptOut: g.stdout,
 		},
 	}
 	// Like every command's output, git's is only streamed with --verbose.

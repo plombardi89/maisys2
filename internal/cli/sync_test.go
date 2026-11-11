@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -486,8 +487,14 @@ func TestGitOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	g := newGlobalOptions(nil, e.environment(&out, &out))
+	var out, errOut bytes.Buffer
+	env := e.environment(&out, &errOut)
+	asked := false
+	env.prompt = func(context.Context, string) (string, error) {
+		asked = true
+		return "", nil
+	}
+	g := newGlobalOptions(nil, env)
 	opts, err := g.gitOptions(paths)
 	if err != nil {
 		t.Fatal(err)
@@ -496,9 +503,16 @@ func TestGitOptions(t *testing.T) {
 		len(opts.Env) != 1 || opts.Env[0] != "GIT_CONFIG_NOSYSTEM=1" {
 		t.Errorf("gitOptions() = %+v, want git, the token, the credentials file and the git environment", opts)
 	}
+	// Clones and pulls can ask for a token, on stdout.
+	if opts.Auth.Prompt != nil {
+		_, _ = opts.Auth.Prompt(t.Context(), "https://example.com/config.git")
+	}
+	if !asked || opts.Auth.PromptOut != io.Writer(&out) {
+		t.Errorf("gitOptions() has the prompt: %v, asking on stdout: %v; want both", asked, opts.Auth.PromptOut == io.Writer(&out))
+	}
 
 	e.findGit = func() (string, error) { return "", gitrepo.ErrNoGit }
-	g = newGlobalOptions(nil, e.environment(&out, &out))
+	g = newGlobalOptions(nil, e.environment(&out, &errOut))
 	if _, err := g.gitOptions(paths); !errors.Is(err, gitrepo.ErrNoGit) || !strings.Contains(err.Error(), "\nInstall it with: ") {
 		t.Errorf("gitOptions() without git: error = %v, want ErrNoGit and how to install git", err)
 	}
