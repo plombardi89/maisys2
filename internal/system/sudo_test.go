@@ -26,13 +26,18 @@ type fakeSudoRun struct {
 	stamp string // its record of a typed password
 }
 
-// useFakeSudo makes the test binary act as sudo in mode (see fakeSudo)
-// when it's run as SudoOptions.Path.
-func useFakeSudo(t *testing.T, mode string) *fakeSudoRun {
+// sudoImpls are the sudos the fake sudo can act as: sudo, and sudo-rs,
+// Ubuntu's sudo since 25.10, whose messages differ.
+var sudoImpls = []string{"sudo", "sudo-rs"}
+
+// useFakeSudo makes the test binary act as sudo, the implementation impl in
+// mode (see fakeSudo), when it's run as SudoOptions.Path.
+func useFakeSudo(t *testing.T, impl, mode string) *fakeSudoRun {
 	t.Helper()
 	dir := t.TempDir()
 	s := &fakeSudoRun{path: testBinary(t), log: filepath.Join(dir, "sudo.log"), stamp: filepath.Join(dir, "stamp")}
 	t.Setenv(fakeEnv, "sudo")
+	t.Setenv("FAKE_SUDO_IMPL", impl)
 	t.Setenv("FAKE_SUDO_MODE", mode)
 	t.Setenv("FAKE_SUDO_LOG", s.log)
 	t.Setenv("FAKE_SUDO_STAMP", s.stamp)
@@ -74,27 +79,38 @@ func (s *fakeSudoRun) count(t *testing.T, args ...string) int {
 
 func TestCheckSudo(t *testing.T) {
 	tests := []struct {
-		mode       string
+		impl, mode string
 		want       SudoStatus
 		wantErr    string
 		wantSudo   bool // whether the error is a *SudoError
 		wantCalled [][]string
 	}{
-		{mode: "nopasswd", want: SudoNoPassword, wantCalled: [][]string{{"-n", "true"}}},
-		{mode: "password", want: SudoNeedsPassword, wantCalled: [][]string{{"-n", "true"}, {"-n", "-l"}}},
+		{impl: "sudo", mode: "nopasswd", want: SudoNoPassword, wantCalled: [][]string{{"-n", "true"}}},
+		{impl: "sudo", mode: "password", want: SudoNeedsPassword, wantCalled: [][]string{{"-n", "true"}, {"-n", "-l"}}},
 		{
-			mode: "notallowed", want: SudoNotAllowed, wantSudo: true,
+			impl: "sudo", mode: "notallowed", want: SudoNotAllowed, wantSudo: true,
 			wantErr:    "tester may not use sudo (Sorry, user tester may not run sudo on testhost.)",
 			wantCalled: [][]string{{"-n", "true"}, {"-n", "-l"}},
 		},
 		{
-			mode: "broken", wantErr: "sudo doesn't work: sudo: effective uid is not 0",
+			impl: "sudo", mode: "broken", wantErr: "sudo doesn't work: sudo: effective uid is not 0",
+			wantCalled: [][]string{{"-n", "true"}},
+		},
+		{impl: "sudo-rs", mode: "nopasswd", want: SudoNoPassword, wantCalled: [][]string{{"-n", "true"}}},
+		{impl: "sudo-rs", mode: "password", want: SudoNeedsPassword, wantCalled: [][]string{{"-n", "true"}, {"-n", "-l"}}},
+		{
+			impl: "sudo-rs", mode: "notallowed", want: SudoNotAllowed, wantSudo: true,
+			wantErr:    "tester may not use sudo (sudo: I'm sorry tester. I'm afraid I can't do that)",
+			wantCalled: [][]string{{"-n", "true"}},
+		},
+		{
+			impl: "sudo-rs", mode: "broken", wantErr: "sudo doesn't work: sudo: sudo must be owned by uid 0",
 			wantCalled: [][]string{{"-n", "true"}},
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.mode, func(t *testing.T) {
-			sudo := useFakeSudo(t, tt.mode)
+		t.Run(tt.impl+"/"+tt.mode, func(t *testing.T) {
+			sudo := useFakeSudo(t, tt.impl, tt.mode)
 			var log bytes.Buffer
 			r := NewRunner(Options{Log: &log, Sudo: SudoOptions{Path: sudo.path, User: "tester", OS: config.Fedora}})
 			got, err := r.CheckSudo(t.Context())
@@ -136,30 +152,34 @@ func TestCheckSudo(t *testing.T) {
 // sudo needs a password: they must fail with ErrNeedsPassword, with sudo
 // only ever run with -n.
 func TestPlanNeverPrompts(t *testing.T) {
-	sudo := useFakeSudo(t, "password")
-	marker := filepath.Join(t.TempDir(), "ran")
-	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader("secret\n")}})
+	for _, impl := range sudoImpls {
+		t.Run(impl, func(t *testing.T) {
+			sudo := useFakeSudo(t, impl, "password")
+			marker := filepath.Join(t.TempDir(), "ran")
+			r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader("secret\n")}})
 
-	for range 3 {
-		_, err := r.Run(t.Context(), Cmd{Name: "touch", Args: []string{marker}, Root: true, Label: "touching"})
-		if !errors.Is(err, ErrNeedsPassword) || !strings.HasPrefix(err.Error(), "touching: ") {
-			t.Fatalf("Run() as root: error = %v, want ErrNeedsPassword naming the command", err)
-		}
-	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("the command ran")
-	}
-	calls := sudo.calls(t)
-	if want := [][]string{{"-n", "true"}, {"-n", "-l"}}; !reflect.DeepEqual(calls, want) {
-		t.Errorf("sudo ran with %q, want only one check: %q", calls, want)
-	}
-	if _, err := os.Stat(sudo.stamp); err == nil {
-		t.Error("sudo read the password")
+			for range 3 {
+				_, err := r.Run(t.Context(), Cmd{Name: "touch", Args: []string{marker}, Root: true, Label: "touching"})
+				if !errors.Is(err, ErrNeedsPassword) || !strings.HasPrefix(err.Error(), "touching: ") {
+					t.Fatalf("Run() as root: error = %v, want ErrNeedsPassword naming the command", err)
+				}
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Error("the command ran")
+			}
+			calls := sudo.calls(t)
+			if want := [][]string{{"-n", "true"}, {"-n", "-l"}}; !reflect.DeepEqual(calls, want) {
+				t.Errorf("sudo ran with %q, want only one check: %q", calls, want)
+			}
+			if _, err := os.Stat(sudo.stamp); err == nil {
+				t.Error("sudo read the password")
+			}
+		})
 	}
 }
 
 func TestRunAsRoot(t *testing.T) {
-	sudo := useFakeSudo(t, "nopasswd")
+	sudo := useFakeSudo(t, "sudo", "nopasswd")
 	var log bytes.Buffer
 	r := NewRunner(Options{Log: &log, Sudo: SudoOptions{Path: sudo.path}})
 
@@ -184,69 +204,78 @@ func TestRunAsRoot(t *testing.T) {
 	if !ok || exitErr.Code != 3 || exitErr.Command != c.String() || exitErr.Label != c.String() || !slices.Equal(exitErr.Tail, []string{"oops"}) {
 		t.Errorf("Run() of a failing command as root: error = %#v, want an *ExitError for %s without sudo", err, c)
 	}
+	// A command's own error isn't sudo asking for a password.
+	c = Cmd{Name: "sh", Args: []string{"-c", "echo 'ssh: a terminal is required' >&2; exit 1"}, Root: true}
+	if _, err := r.Run(t.Context(), c); errors.Is(err, ErrNeedsPassword) || !errors.As(err, new(*ExitError)) {
+		t.Errorf("Run() of a command as root that says a terminal is required: error = %v, want its own failure", err)
+	}
 	if n := sudo.count(t, "-n", "true"); n != 1 {
 		t.Errorf("sudo was checked %d times, want once", n)
 	}
 }
 
 func TestStartSudo(t *testing.T) {
-	sudo := useFakeSudo(t, "password")
-	var log bytes.Buffer
-	r := NewRunner(Options{Log: &log, Sudo: SudoOptions{
-		Path:    sudo.path,
-		Stdin:   strings.NewReader("secret\n"),
-		Refresh: 20 * time.Millisecond,
-	}})
-	t.Cleanup(r.StopSudo)
+	for _, impl := range sudoImpls {
+		t.Run(impl, func(t *testing.T) {
+			sudo := useFakeSudo(t, impl, "password")
+			var log bytes.Buffer
+			r := NewRunner(Options{Log: &log, Sudo: SudoOptions{
+				Path:    sudo.path,
+				Stdin:   strings.NewReader("secret\n"),
+				Refresh: 20 * time.Millisecond,
+			}})
+			t.Cleanup(r.StopSudo)
 
-	if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); !errors.Is(err, ErrNeedsPassword) {
-		t.Fatalf("Run() as root before StartSudo: error = %v, want ErrNeedsPassword", err)
-	}
-	if err := r.StartSudo(t.Context()); err != nil {
-		t.Fatalf("StartSudo() error = %v", err)
-	}
-	if err := r.StartSudo(t.Context()); err != nil {
-		t.Fatalf("StartSudo() a second time: error = %v", err)
-	}
-	if n := sudo.count(t, "-v"); n != 1 {
-		t.Errorf("sudo -v ran %d times, want once", n)
-	}
-	for _, c := range sudo.calls(t) {
-		if !slices.Contains(c, "-n") && !slices.Equal(c, []string{"-v"}) {
-			t.Errorf("sudo ran without -n: %q", c)
-		}
-	}
+			if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); !errors.Is(err, ErrNeedsPassword) {
+				t.Fatalf("Run() as root before StartSudo: error = %v, want ErrNeedsPassword", err)
+			}
+			if err := r.StartSudo(t.Context()); err != nil {
+				t.Fatalf("StartSudo() error = %v", err)
+			}
+			if err := r.StartSudo(t.Context()); err != nil {
+				t.Fatalf("StartSudo() a second time: error = %v", err)
+			}
+			if n := sudo.count(t, "-v"); n != 1 {
+				t.Errorf("sudo -v ran %d times, want once", n)
+			}
+			for _, c := range sudo.calls(t) {
+				if !slices.Contains(c, "-n") && !slices.Equal(c, []string{"-v"}) {
+					t.Errorf("sudo ran without -n: %q", c)
+				}
+			}
 
-	res, err := r.Run(t.Context(), Cmd{Name: "echo", Args: []string{"as root"}, Root: true})
-	if err != nil || string(res.Stdout) != "as root\n" {
-		t.Fatalf("Run() as root in the session = %q, %v", res.Stdout, err)
-	}
-	// The refresh goroutine may run sudo -n -v at any time, so look for the
-	// command among the calls rather than expecting it last.
-	want := []string{"-n", "--", "env", "LC_ALL=C", "echo", "as root"}
-	if calls := sudo.calls(t); !slices.ContainsFunc(calls, func(c []string) bool { return slices.Equal(c, want) }) {
-		t.Errorf("sudo calls = %q, want one with %q", calls, want)
-	}
+			res, err := r.Run(t.Context(), Cmd{Name: "echo", Args: []string{"as root"}, Root: true})
+			if err != nil || string(res.Stdout) != "as root\n" {
+				t.Fatalf("Run() as root in the session = %q, %v", res.Stdout, err)
+			}
+			// The refresh goroutine may run sudo -n -v at any time, so look
+			// for the command among the calls rather than expecting it last.
+			want := []string{"-n", "--", "env", "LC_ALL=C", "echo", "as root"}
+			if calls := sudo.calls(t); !slices.ContainsFunc(calls, func(c []string) bool { return slices.Equal(c, want) }) {
+				t.Errorf("sudo calls = %q, want one with %q", calls, want)
+			}
 
-	eventually(t, func() bool { return sudo.count(t, "-n", "-v") >= 2 })
-	r.StopSudo()
-	refreshed := sudo.count(t, "-n", "-v")
-	time.Sleep(100 * time.Millisecond)
-	if n := sudo.count(t, "-n", "-v"); n != refreshed {
-		t.Errorf("sudo was refreshed %d more times after StopSudo", n-refreshed)
-	}
-	if !strings.Contains(log.String(), "$ "+sudo.path+" -v\n") || !strings.Contains(log.String(), "$ "+sudo.path+" -n -v\n") {
-		t.Errorf("the log doesn't record sudo -v and its refreshes:\n%s", log.String())
-	}
+			eventually(t, func() bool { return sudo.count(t, "-n", "-v") >= 2 })
+			r.StopSudo()
+			refreshed := sudo.count(t, "-n", "-v")
+			time.Sleep(100 * time.Millisecond)
+			if n := sudo.count(t, "-n", "-v"); n != refreshed {
+				t.Errorf("sudo was refreshed %d more times after StopSudo", n-refreshed)
+			}
+			if !strings.Contains(log.String(), "$ "+sudo.path+" -v\n") || !strings.Contains(log.String(), "$ "+sudo.path+" -n -v\n") {
+				t.Errorf("the log doesn't record sudo -v and its refreshes:\n%s", log.String())
+			}
 
-	// After the session, sudo is checked again, and still works while its
-	// timestamp lasts.
-	checks := sudo.count(t, "-n", "true")
-	if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); err != nil {
-		t.Errorf("Run() as root after StopSudo: error = %v", err)
-	}
-	if n := sudo.count(t, "-n", "true"); n != checks+1 {
-		t.Errorf("sudo was checked %d times after StopSudo, want once", n-checks)
+			// After the session, sudo is checked again, and still works while
+			// its timestamp lasts.
+			checks := sudo.count(t, "-n", "true")
+			if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); err != nil {
+				t.Errorf("Run() as root after StopSudo: error = %v", err)
+			}
+			if n := sudo.count(t, "-n", "true"); n != checks+1 {
+				t.Errorf("sudo was checked %d times after StopSudo, want once", n-checks)
+			}
+		})
 	}
 }
 
@@ -255,7 +284,7 @@ func TestStartSudo(t *testing.T) {
 // a NOPASSWD rule for the user and their group's rule, which needs a
 // password, sudo -v does.
 func TestStartSudoWithoutPassword(t *testing.T) {
-	sudo := useFakeSudo(t, "rule")
+	sudo := useFakeSudo(t, "sudo", "rule")
 	var stderr bytes.Buffer
 	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader(""), Stderr: &stderr}})
 	t.Cleanup(r.StopSudo)
@@ -279,7 +308,7 @@ func TestStartSudoWithoutPassword(t *testing.T) {
 // runs where the terminal's Ctrl-C reaches it, and that commands run as
 // root and the session's refreshes don't.
 func TestSudoInForeground(t *testing.T) {
-	sudo := useFakeSudo(t, "password")
+	sudo := useFakeSudo(t, "sudo", "password")
 	groups := filepath.Join(t.TempDir(), "groups")
 	t.Setenv("FAKE_SUDO_GROUPS", groups)
 	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader("secret\n"), Refresh: 10 * time.Millisecond}})
@@ -312,7 +341,7 @@ func TestSudoInForeground(t *testing.T) {
 }
 
 func TestStartSudoStopsWithContext(t *testing.T) {
-	sudo := useFakeSudo(t, "nopasswd")
+	sudo := useFakeSudo(t, "sudo", "nopasswd")
 	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Refresh: 10 * time.Millisecond}})
 	ctx, cancel := context.WithCancel(t.Context())
 	if err := r.StartSudo(ctx); err != nil {
@@ -340,17 +369,20 @@ func TestStartSudoStopsWithContext(t *testing.T) {
 
 func TestStartSudoFails(t *testing.T) {
 	tests := []struct {
-		name, mode, password string
-		want                 string
-		wantStatus           SudoStatus // of the *SudoError, if it is one
+		name, impl, mode, password string
+		want                       string
+		wantStatus                 SudoStatus // of the *SudoError, if it is one
 	}{
-		{name: "wrong password", mode: "password", password: "wrong", want: "sudo couldn't check your password: sudo: 1 incorrect password attempt"},
-		{name: "not allowed", mode: "notallowed", password: "secret", want: "tester may not use sudo (tester is not in the sudoers file.)", wantStatus: SudoNotAllowed},
-		{name: "broken", mode: "broken", want: "sudo couldn't check your password: sudo: effective uid is not 0"},
+		{name: "wrong password", impl: "sudo", mode: "password", password: "wrong", want: "sudo couldn't check your password: sudo: 1 incorrect password attempt"},
+		{name: "not allowed", impl: "sudo", mode: "notallowed", password: "secret", want: "tester may not use sudo (tester is not in the sudoers file.)", wantStatus: SudoNotAllowed},
+		{name: "broken", impl: "sudo", mode: "broken", want: "sudo couldn't check your password: sudo: effective uid is not 0"},
+		{name: "wrong password", impl: "sudo-rs", mode: "password", password: "wrong", want: "sudo couldn't check your password: sudo: maximum 3 incorrect authentication attempts"},
+		{name: "not allowed", impl: "sudo-rs", mode: "notallowed", password: "secret", want: "tester may not use sudo (sudo: I'm sorry tester. I'm afraid I can't do that)", wantStatus: SudoNotAllowed},
+		{name: "broken", impl: "sudo-rs", mode: "broken", want: "sudo couldn't check your password: sudo: sudo must be owned by uid 0"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sudo := useFakeSudo(t, tt.mode)
+		t.Run(tt.impl+"/"+tt.name, func(t *testing.T) {
+			sudo := useFakeSudo(t, tt.impl, tt.mode)
 			var stderr bytes.Buffer
 			r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, User: "tester", OS: config.Fedora, Stdin: strings.NewReader(tt.password + "\n"), Stderr: &stderr}})
 			t.Cleanup(r.StopSudo)
@@ -384,18 +416,22 @@ func TestStartSudoFails(t *testing.T) {
 // TestSessionRunsOut checks a root command in a session whose sudo
 // timestamp is gone, as after a laptop sleeps.
 func TestSessionRunsOut(t *testing.T) {
-	sudo := useFakeSudo(t, "password")
-	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader("secret\n")}})
-	t.Cleanup(r.StopSudo)
-	if err := r.StartSudo(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(sudo.stamp); err != nil {
-		t.Fatal(err)
-	}
-	_, err := r.Run(t.Context(), Cmd{Name: "true", Root: true, Label: "testing"})
-	if !errors.Is(err, ErrNeedsPassword) || !strings.Contains(err.Error(), "testing: sudo's session ran out") {
-		t.Errorf("Run() as root after the session ran out: error = %v, want ErrNeedsPassword saying so", err)
+	for _, impl := range sudoImpls {
+		t.Run(impl, func(t *testing.T) {
+			sudo := useFakeSudo(t, impl, "password")
+			r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path, Stdin: strings.NewReader("secret\n")}})
+			t.Cleanup(r.StopSudo)
+			if err := r.StartSudo(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(sudo.stamp); err != nil {
+				t.Fatal(err)
+			}
+			_, err := r.Run(t.Context(), Cmd{Name: "true", Root: true, Label: "testing"})
+			if !errors.Is(err, ErrNeedsPassword) || !strings.Contains(err.Error(), "testing: sudo's session ran out") {
+				t.Errorf("Run() as root after the session ran out: error = %v, want ErrNeedsPassword saying so", err)
+			}
+		})
 	}
 }
 
@@ -403,24 +439,60 @@ func TestSessionRunsOut(t *testing.T) {
 // password, followed by a root command that needs one, ends up as
 // ErrNeedsPassword for that command and the ones after it.
 func TestPlanSudoRunsOut(t *testing.T) {
-	sudo := useFakeSudo(t, "password")
-	if err := os.WriteFile(sudo.stamp, nil, 0o600); err != nil {
-		t.Fatal(err)
+	for _, impl := range sudoImpls {
+		t.Run(impl, func(t *testing.T) {
+			sudo := useFakeSudo(t, impl, "password")
+			if err := os.WriteFile(sudo.stamp, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path}})
+			if got, err := r.CheckSudo(t.Context()); got != SudoNoPassword || err != nil {
+				t.Fatalf("CheckSudo() = %q, %v; want SudoNoPassword", got, err)
+			}
+			if err := os.Remove(sudo.stamp); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); !errors.Is(err, ErrNeedsPassword) {
+					t.Errorf("Run() as root once sudo needs a password: error = %v, want ErrNeedsPassword", err)
+				}
+			}
+			if n := sudo.count(t, "-n", "--", "env", "LC_ALL=C", "true"); n != 1 {
+				t.Errorf("sudo ran the command %d times, want once before it knew sudo needs a password", n)
+			}
+		})
 	}
-	r := NewRunner(Options{Sudo: SudoOptions{Path: sudo.path}})
-	if got, err := r.CheckSudo(t.Context()); got != SudoNoPassword || err != nil {
-		t.Fatalf("CheckSudo() = %q, %v; want SudoNoPassword", got, err)
+}
+
+// TestSudoMessages checks how sudo's and sudo-rs's messages are read.
+func TestSudoMessages(t *testing.T) {
+	tests := []struct {
+		msg                          string
+		wantPassword, wantNotAllowed bool
+	}{
+		{msg: "sudo: a password is required", wantPassword: true},
+		{msg: "sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper", wantPassword: true},
+		{msg: "Sorry, user tester may not run sudo on testhost.", wantNotAllowed: true},
+		{msg: "tester is not in the sudoers file.  This incident will be reported.", wantNotAllowed: true},
+		{msg: "Sorry, user tester is not allowed to execute '/usr/bin/true' as root on testhost.", wantNotAllowed: true},
+		{msg: "sudo: 1 incorrect password attempt"},
+		{msg: "sudo: effective uid is not 0, is /usr/bin/sudo on a file system with the 'nosuid' option set or an NFS file system without root privileges?"},
+		// sudo-rs
+		{msg: "sudo: interactive authentication is required", wantPassword: true},
+		{msg: "sudo: I'm sorry tester. I'm afraid I can't do that", wantNotAllowed: true},
+		{msg: "sudo: Sorry, user tester may not run sudo on testhost.", wantNotAllowed: true},
+		{msg: "User tester is not allowed to run sudo on testhost.", wantNotAllowed: true},
+		{msg: "sudo: Authentication failed, try again."},
+		{msg: "sudo: maximum 3 incorrect authentication attempts"},
+		{msg: "sudo: sudo must be owned by uid 0 and have the setuid bit set"},
 	}
-	if err := os.Remove(sudo.stamp); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if _, err := r.Run(t.Context(), Cmd{Name: "true", Root: true}); !errors.Is(err, ErrNeedsPassword) {
-			t.Errorf("Run() as root once sudo needs a password: error = %v, want ErrNeedsPassword", err)
+	for _, tt := range tests {
+		if got := passwordRequired(tt.msg); got != tt.wantPassword {
+			t.Errorf("passwordRequired(%q) = %t, want %t", tt.msg, got, tt.wantPassword)
 		}
-	}
-	if n := sudo.count(t, "-n", "--", "env", "LC_ALL=C", "true"); n != 1 {
-		t.Errorf("sudo ran the command %d times, want once before it knew sudo needs a password", n)
+		if got := notAllowed(tt.msg); got != tt.wantNotAllowed {
+			t.Errorf("notAllowed(%q) = %t, want %t", tt.msg, got, tt.wantNotAllowed)
+		}
 	}
 }
 

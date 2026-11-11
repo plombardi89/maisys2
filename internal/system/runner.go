@@ -198,7 +198,7 @@ func (r *ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 		return Result{ExitCode: -1}, fmt.Errorf("%s: %w", c.what(), err)
 	}
 	res, err := r.run(ctx, c.viaSudo(sudo), nil)
-	if res.ExitCode == 1 && strings.Contains(string(res.Stderr), "sudo: a password is required") {
+	if msg := sudoMessage(res); res.ExitCode == 1 && strings.HasPrefix(msg, "sudo: ") && passwordRequired(msg) {
 		return res, fmt.Errorf("%s: %w", c.what(), r.sudo.passwordNeeded())
 	}
 	if ee, ok := errors.AsType[*ExitError](err); ok {

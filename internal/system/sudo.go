@@ -371,13 +371,21 @@ func sudoMessage(res Result) string {
 }
 
 // passwordRequired reports whether sudo's message says it needs a password.
+// It knows the messages of sudo and of sudo-rs, Ubuntu's sudo since 25.10.
 func passwordRequired(msg string) bool {
-	return strings.Contains(msg, "a password is required") || strings.Contains(msg, "a terminal is required")
+	for _, m := range []string{"a password is required", "a terminal is required", "interactive authentication is required"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // notAllowed reports whether sudo's message says the user may not use it.
+// It knows the messages of sudo and of sudo-rs, which says so without
+// asking for a password.
 func notAllowed(msg string) bool {
-	for _, m := range []string{"is not in the sudoers file", "may not run sudo", "is not allowed to execute", "is not allowed to run sudo"} {
+	for _, m := range []string{"is not in the sudoers file", "may not run sudo", "is not allowed to execute", "is not allowed to run sudo", "I'm afraid I can't do that"} {
 		if strings.Contains(msg, m) {
 			return true
 		}

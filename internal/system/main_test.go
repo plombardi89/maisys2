@@ -90,7 +90,8 @@ func helper(args []string) int {
 // says, and appends its arguments as a JSON array to the file named by
 // FAKE_SUDO_LOG. If FAKE_SUDO_GROUPS names a file, it also appends its
 // arguments and process group (see processGroup) there, as a line of
-// "ARGS: GROUP". The modes are:
+// "ARGS: GROUP". FAKE_SUDO_IMPL says which sudo it acts as: "sudo", or
+// "sudo-rs", whose messages differ. The modes are:
 //   - nopasswd: sudo works without a password
 //   - password: sudo needs the password "secret", unless the file named by
 //     FAKE_SUDO_STAMP exists; reading the password creates it
@@ -136,21 +137,55 @@ options:
 			break options
 		}
 	}
+	stdin := bufio.NewReader(os.Stdin)
 	readPassword := func() string {
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, _ := stdin.ReadString('\n')
 		return strings.TrimSpace(line)
+	}
+
+	// sudo-rs, Ubuntu's sudo since 25.10, says the same things in other
+	// words, and refuses a user who may not use it before it asks for a
+	// password.
+	rs := os.Getenv("FAKE_SUDO_IMPL") == "sudo-rs"
+	needsPassword := "sudo: a password is required"
+	if rs {
+		needsPassword = "sudo: interactive authentication is required"
+	}
+	// wrongPassword answers a wrong password. sudo-rs asks again, three
+	// times in all; it returns whether the right one came.
+	wrongPassword := func() bool {
+		if !rs {
+			fmt.Fprintln(os.Stderr, "sudo: 1 incorrect password attempt")
+			return false
+		}
+		for range 2 {
+			fmt.Fprintln(os.Stderr, "sudo: Authentication failed, try again.")
+			if readPassword() == "secret" {
+				return true
+			}
+		}
+		fmt.Fprintln(os.Stderr, "sudo: maximum 3 incorrect authentication attempts")
+		return false
 	}
 
 	switch os.Getenv("FAKE_SUDO_MODE") {
 	case "broken":
-		fmt.Fprintln(os.Stderr, "sudo: effective uid is not 0, is /usr/bin/sudo on a file system with the 'nosuid' option set or an NFS file system without root privileges?")
+		if rs {
+			fmt.Fprintln(os.Stderr, "sudo: sudo must be owned by uid 0 and have the setuid bit set")
+		} else {
+			fmt.Fprintln(os.Stderr, "sudo: effective uid is not 0, is /usr/bin/sudo on a file system with the 'nosuid' option set or an NFS file system without root privileges?")
+		}
 		return 1
 	case "notallowed":
 		switch {
+		case rs && list:
+			fmt.Fprintln(os.Stderr, "sudo: Sorry, user tester may not run sudo on testhost.")
+		case rs:
+			fmt.Fprintln(os.Stderr, "sudo: I'm sorry tester. I'm afraid I can't do that")
 		case nonInteractive && list:
 			fmt.Fprintln(os.Stderr, "Sorry, user tester may not run sudo on testhost.")
 		case nonInteractive:
-			fmt.Fprintln(os.Stderr, "sudo: a password is required")
+			fmt.Fprintln(os.Stderr, needsPassword)
 		default:
 			readPassword()
 			fmt.Fprintln(os.Stderr, "tester is not in the sudoers file.")
@@ -160,11 +195,10 @@ options:
 		stamp := os.Getenv("FAKE_SUDO_STAMP")
 		if _, err := os.Stat(stamp); err != nil {
 			if nonInteractive {
-				fmt.Fprintln(os.Stderr, "sudo: a password is required")
+				fmt.Fprintln(os.Stderr, needsPassword)
 				return 1
 			}
-			if readPassword() != "secret" {
-				fmt.Fprintln(os.Stderr, "sudo: 1 incorrect password attempt")
+			if readPassword() != "secret" && !wrongPassword() {
 				return 1
 			}
 			if err := os.WriteFile(stamp, nil, 0o600); err != nil {
@@ -176,12 +210,12 @@ options:
 		// needs a password: commands run without one, but sudo -v asks for
 		// it, as it does unless every rule is NOPASSWD.
 		if validate && nonInteractive {
-			fmt.Fprintln(os.Stderr, "sudo: a password is required")
+			fmt.Fprintln(os.Stderr, needsPassword)
 			return 1
 		}
 		if validate {
 			readPassword()
-			fmt.Fprintln(os.Stderr, "sudo: 1 incorrect password attempt")
+			wrongPassword()
 			return 1
 		}
 	}
