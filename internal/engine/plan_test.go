@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -210,6 +212,12 @@ func TestPlanDependencyOrder(t *testing.T) {
 			name:    "dependency left out by only",
 			modules: []mod{{name: "mage", deps: []string{"golang"}}, {name: "golang"}, {name: "files"}},
 			only:    []string{"files", "mage"},
+			want:    []string{"files"},
+		},
+		{
+			name:    "disabled dependency left out by only",
+			modules: []mod{{name: "mage", deps: []string{"golang"}}, {name: "golang", disabled: true}, {name: "files"}},
+			only:    []string{"files", "mage"},
 			want:    []string{"mage", "files"},
 		},
 		{
@@ -318,6 +326,124 @@ func TestPlanOnly(t *testing.T) {
 			t.Errorf("NewPlan() error = %v, want %q", err, want)
 		}
 	})
+}
+
+// TestPlanOnlyHoldsBack limits syncs to modules that depend on others:
+// those that depend on an enabled module the sync leaves out aren't
+// checked, applied or pruned, and that isn't a failure.
+func TestPlanOnlyHoldsBack(t *testing.T) {
+	tests := []struct {
+		name         string
+		only         []string
+		disabled     []string
+		wantModules  []string
+		wantHeld     []HeldBack
+		wantRemovals []string
+	}{
+		{
+			name:         "dependencies left out",
+			only:         []string{"legacy", "files"},
+			wantModules:  []string{"files"},
+			wantHeld:     []HeldBack{{Name: "legacy", Needs: []string{"golang", "kubectl"}}},
+			wantRemovals: []string{"file:~/.vimrc"},
+		},
+		{
+			name:        "a dependency left out",
+			only:        []string{"kubectl", "legacy"},
+			wantModules: []string{"kubectl"},
+			wantHeld:    []HeldBack{{Name: "legacy", Needs: []string{"golang"}}},
+		},
+		{
+			name:         "dependencies included",
+			only:         []string{"legacy", "golang", "kubectl", "packages"},
+			wantModules:  []string{"packages", "golang", "kubectl", "legacy"},
+			wantRemovals: []string{"cleanup:~/.ansible"},
+		},
+		{
+			name:         "dependencies that aren't enabled",
+			only:         []string{"legacy"},
+			disabled:     []string{"golang", "kubectl"},
+			wantModules:  []string{"legacy"},
+			wantRemovals: []string{"cleanup:~/.ansible"},
+		},
+		{
+			name: "a dependency left out by a dependency",
+			only: []string{"mage", "golang"},
+			wantHeld: []HeldBack{
+				{Name: "golang", Needs: []string{"packages"}},
+				{Name: "mage", Needs: []string{"packages"}},
+			},
+		},
+		{
+			name:         "every module",
+			wantModules:  []string{"packages", "golang", "kubectl", "legacy", "mage", "files"},
+			wantRemovals: []string{"file:~/.vimrc", "cleanup:~/.ansible"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.only = tt.only
+			var checked sync.Map
+			add := func(name string, deps ...string) {
+				r := res("fake:"+name, resource.Create, name)
+				r.onCheck = func(context.Context, *resource.Runtime) (resource.Change, error) {
+					checked.Store(name, true)
+					return r.change, nil
+				}
+				e.add(name, deps, r)
+			}
+			add("packages")
+			add("golang", "packages")
+			add("kubectl")
+			add("legacy", "golang", "kubectl")
+			add("mage", "golang")
+			add("files")
+			for _, name := range tt.disabled {
+				e.disable(name)
+			}
+			e.record("cleanup:~/.ansible", "cleanup", "legacy")
+			e.record("file:~/.vimrc", "file", "files")
+			e.remover(&fakeRemover{kind: "cleanup", change: resource.Change{Action: resource.Remove}})
+			e.remover(&fakeRemover{kind: "file", change: resource.Change{Action: resource.Remove}})
+
+			p := e.plan()
+			if got := names(p); !slices.Equal(got, tt.wantModules) {
+				t.Errorf("modules = %q, want %q", got, tt.wantModules)
+			}
+			var held []HeldBack
+			for _, h := range p.HeldBack {
+				held = append(held, *h)
+				if _, ok := checked.Load(h.Name); ok {
+					t.Errorf("%s is held back, but its resources were checked", h.Name)
+				}
+			}
+			if !reflect.DeepEqual(held, tt.wantHeld) {
+				t.Errorf("held back = %+v, want %+v", held, tt.wantHeld)
+			}
+			if got := removalIDs(p); !slices.Equal(got, tt.wantRemovals) {
+				t.Errorf("removals = %q, want %q", got, tt.wantRemovals)
+			}
+			if p.Failed() {
+				t.Error("Failed() = true, want false")
+			}
+
+			result := Apply(t.Context(), p, ApplyInput{Store: e.store})
+			if !result.OK() || result.ExitCode() != 0 {
+				t.Errorf("OK(), ExitCode() = %t, %d; want true, 0", result.OK(), result.ExitCode())
+			}
+			var want []string
+			for _, name := range tt.wantModules {
+				want = append(want, "apply fake:"+name)
+			}
+			for _, id := range tt.wantRemovals {
+				want = append(want, "remove "+id)
+			}
+			if got := e.steps.get(); !slices.Equal(got, want) {
+				t.Errorf("steps = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestPlanRemovals(t *testing.T) {
