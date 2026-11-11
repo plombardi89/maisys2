@@ -93,7 +93,8 @@ func (s *syncRun) findRepo() error {
 // a clone of rawURL. Without rawURL, dir must be a clone already, and its
 // remote, if it has one, is the config repo's URL. It checks the repo's
 // maisys.toml, and if there's none, removes a clone it just made, so the
-// next try starts clean.
+// next try starts clean. It also removes what a clone that failed, or was
+// interrupted, left behind.
 func (s *syncRun) useClone(rawURL, dir string) error {
 	ctx, errOut := s.cmd.Context(), s.cmd.ErrOrStderr()
 	opts, err := s.g.gitOptions(s.paths)
@@ -124,6 +125,7 @@ func (s *syncRun) useClone(rawURL, dir string) error {
 		} else {
 			s.g.debugf(errOut, "cloning %s into %s", gitrepo.Redact(rawURL), dir)
 			if s.clone, err = gitrepo.Clone(ctx, rawURL, dir, opts); err != nil {
+				removeFailedClone(errOut, dir, state == folderEmpty)
 				return err
 			}
 			s.cloned, keepDir = true, state == folderEmpty
@@ -149,12 +151,19 @@ func (s *syncRun) useClone(rawURL, dir string) error {
 }
 
 // existingClone opens the clone of rawURL in dir, and fails, asking for
-// --dir, if dir holds anything else.
+// --dir, if dir holds anything else. It also fails if the clone has no
+// commits, as a clone that was killed leaves it, rather than remove it: a
+// repo set up by hand looks the same, and may have work in it.
 func existingClone(ctx context.Context, rawURL, dir string, opts gitrepo.Options) (*gitrepo.Repo, error) {
 	clone, err := gitrepo.Open(ctx, dir, opts)
-	var remote string
+	var remote, head string
 	if err == nil {
 		remote, err = clone.RemoteURL(ctx)
+	}
+	if err == nil && sameURL(remote, rawURL) {
+		if head, err = clone.Head(ctx); err != nil && ctx.Err() == nil {
+			return nil, err
+		}
 	}
 	var why string
 	switch {
@@ -166,6 +175,9 @@ func existingClone(ctx context.Context, rawURL, dir string, opts gitrepo.Options
 		why = "it holds a clone with no remote"
 	case !sameURL(remote, rawURL):
 		why = "it holds a clone of " + gitrepo.Redact(remote)
+	case head == "":
+		return nil, fmt.Errorf("can't clone %s into %s: the folder holds an unfinished clone of it, with no commits, as an interrupted clone leaves behind. "+
+			"Delete the folder and try again, or choose another folder for it with --dir", gitrepo.Redact(rawURL), dir)
 	default:
 		return clone, nil
 	}
@@ -310,6 +322,19 @@ func removeClone(dir string, keepDir bool) error {
 		errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
 	}
 	return errors.Join(errs...)
+}
+
+// removeFailedClone removes what a clone into dir that failed left behind,
+// with a warning if it can't. git does that itself, except when it's
+// killed, as it is when the clone is cancelled, for example by Ctrl-C.
+// keepDir is as for removeClone.
+func removeFailedClone(errOut io.Writer, dir string, keepDir bool) {
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err := removeClone(dir, keepDir); err != nil {
+		_, _ = fmt.Fprintf(errOut, "maisys: warning: couldn't remove the unfinished clone in %s: %v\n", dir, err)
+	}
 }
 
 // isLocalPath reports whether rawURL is a path rather than a URL, the way

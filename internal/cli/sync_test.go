@@ -2,13 +2,18 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plombardi89/maisys2/internal/gitrepo"
 	"github.com/plombardi89/maisys2/internal/settings"
@@ -416,6 +421,22 @@ func TestSyncFirstRunErrors(t *testing.T) {
 			},
 		},
 		{
+			name: "the default folder holds an unfinished clone",
+			setup: func(e *testEnv) ([]string, string) {
+				// What a clone that's killed leaves: origin, and no commits.
+				remote := e.newRemote()
+				e.git(e.t.TempDir(), "init", "--quiet", e.defaultRepoDir())
+				e.git(e.defaultRepoDir(), "remote", "add", "origin", remote)
+				return []string{"sync", remote}, "maisys: can't clone " + remote + " into %s: the folder holds an unfinished clone of it, with no commits, " +
+					"as an interrupted clone leaves behind. Delete the folder and try again, or choose another folder for it with --dir\n"
+			},
+			check: func(e *testEnv) {
+				if !exists(filepath.Join(e.defaultRepoDir(), ".git")) {
+					e.t.Errorf("%s was removed, want it kept", e.defaultRepoDir())
+				}
+			},
+		},
+		{
 			name: "no machine",
 			setup: func(e *testEnv) ([]string, string) {
 				return []string{"sync", e.newRemote()}, `maisys: can't tell which machine this is: no machine file in %s is named after the hostname "nothing-matches"`
@@ -481,6 +502,67 @@ func TestGitOptions(t *testing.T) {
 	if _, err := g.gitOptions(paths); !errors.Is(err, gitrepo.ErrNoGit) || !strings.Contains(err.Error(), "\nInstall it with: ") {
 		t.Errorf("gitOptions() without git: error = %v, want ErrNoGit and how to install git", err)
 	}
+}
+
+// TestSyncFirstRunCloneInterrupted checks that a clone that's interrupted,
+// as Ctrl-C does, leaves nothing behind, so the next sync can clone again.
+// git can't clean up itself: it's killed.
+func TestSyncFirstRunCloneInterrupted(t *testing.T) {
+	tests := []struct {
+		name  string
+		empty bool // the folder exists, and is empty
+	}{
+		{"into a new folder", false},
+		{"into an empty folder", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.useGit()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			url := stalledServer(t, cancel) + "/config.git"
+			dir := e.defaultRepoDir()
+			if tt.empty {
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var out, errOut bytes.Buffer
+			code := execute(ctx, []string{"sync", url}, e.environment(&out, &errOut))
+			if code != exitError || !strings.Contains(errOut.String(), context.Canceled.Error()) {
+				t.Errorf("exit code = %d, stderr:\n%s\nwant %d, and the clone cancelled", code, errOut.String(), exitError)
+			}
+			entries, err := os.ReadDir(dir)
+			switch {
+			case tt.empty && (err != nil || len(entries) != 0):
+				t.Errorf("%s has %d entries (%v), want it kept, and empty", dir, len(entries), err)
+			case !tt.empty && !errors.Is(err, fs.ErrNotExist):
+				t.Errorf("%s exists (%v), want it removed", dir, err)
+			}
+			if s := e.loadSettings(); s != nil {
+				t.Errorf("saved the local settings %+v, want none", s)
+			}
+		})
+	}
+}
+
+// stalledServer starts an HTTP server that never answers in time: on each
+// request, it calls interrupt, then fails the request once git has had
+// time to be killed. It returns the server's URL.
+func stalledServer(t *testing.T, interrupt func()) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		interrupt()
+		// The git that's cloning is killed as soon as the context is
+		// cancelled. Answering only after that, rather than never, lets
+		// the helper git started for HTTP, which outlives it, exit.
+		time.Sleep(200 * time.Millisecond)
+		http.Error(w, "too late", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 func TestSyncPull(t *testing.T) {
