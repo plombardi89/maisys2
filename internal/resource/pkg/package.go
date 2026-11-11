@@ -169,13 +169,13 @@ func (p *Package) Apply(ctx context.Context, rt *resource.Runtime) (state.Record
 
 // ApplyGroup installs and upgrades the packages of members, from every
 // module, in one transaction: one apt-get install, or on Fedora one dnf
-// install and one dnf upgrade. If that fails, it tries again module by
-// module, so that only the modules whose packages can't be installed fail,
-// each with its own error. On Ubuntu, it refreshes the package lists first
-// if they're out of date. The plan may not have seen the upgrades the
-// refreshed lists have, as when sudo needed a password to refresh them
-// then: the members' modules' other packages get those upgrades too, so
-// that they're all at their latest version.
+// install, dnf upgrade, or dnf do for both. If that fails, it tries again
+// module by module, so that only the modules whose packages can't be
+// installed fail, each with its own error. On Ubuntu, it refreshes the
+// package lists first if they're out of date. The plan may not have seen
+// the upgrades the refreshed lists have, as when sudo needed a password to
+// refresh them then: the members' modules' other packages get those
+// upgrades too, so that they're all at their latest version.
 func (p *Package) ApplyGroup(ctx context.Context, rt *resource.Runtime, members []resource.Member) []resource.Outcome {
 	out := make([]resource.Outcome, len(members))
 	pkgs := make([]*Package, len(members))

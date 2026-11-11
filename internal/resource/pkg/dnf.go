@@ -169,20 +169,27 @@ func whatProvides(ctx context.Context, m *Manager, names []string) map[string][]
 	return providers
 }
 
-// install installs packages with dnf install, and upgrades others with dnf
-// upgrade: dnf install leaves installed packages as they are.
+// install installs and upgrades packages in one dnf transaction: with dnf
+// install for packages to install, which leaves installed packages as they
+// are; dnf upgrade for packages to upgrade; and, if there are both, dnf do,
+// which takes several actions at once (dnf 5.2.14 and later, which every
+// supported Fedora has). Package names never start with "-", so none is
+// read as another action.
 func (dnf) install(ctx context.Context, m *Manager, install, upgrade []string) error {
-	if len(install) > 0 {
-		if _, err := m.Run(ctx, system.Cmd{Name: "dnf", Args: append([]string{"install", "-y"}, install...), Root: true, Label: "dnf install"}); err != nil {
-			return err
-		}
+	var args []string
+	label := "dnf do"
+	switch {
+	case len(install) > 0 && len(upgrade) > 0:
+		args = slices.Concat([]string{"do", "-y", "--action=install"}, install, []string{"--action=upgrade"}, upgrade)
+	case len(install) > 0:
+		args, label = append([]string{"install", "-y"}, install...), "dnf install"
+	case len(upgrade) > 0:
+		args, label = append([]string{"upgrade", "-y"}, upgrade...), "dnf upgrade"
+	default:
+		return nil
 	}
-	if len(upgrade) > 0 {
-		if _, err := m.Run(ctx, system.Cmd{Name: "dnf", Args: append([]string{"upgrade", "-y"}, upgrade...), Root: true, Label: "dnf upgrade"}); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := m.Run(ctx, system.Cmd{Name: "dnf", Args: args, Root: true, Label: label})
+	return err
 }
 
 // rpmRow is an installed package rpm -q describes.

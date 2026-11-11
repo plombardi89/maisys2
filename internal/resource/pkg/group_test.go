@@ -196,23 +196,49 @@ func TestApplyGroupOneTransaction(t *testing.T) {
 		}
 	})
 	t.Run("fedora", func(t *testing.T) {
-		s := fedora(t)
-		s.fakeDnf(map[string]string{"jq": "1.7.1-11.fc44", "tmux": "3.5a-3.fc44"}, []string{"htop", "podman"}, map[string]string{"tmux": "3.5a-4.fc44"})
-		s.on("dnf install", result(0, "Complete!\n", ""))
-		s.on("dnf upgrade", result(0, "Complete!\n", ""))
+		tests := []struct {
+			name    string
+			sets    []moduleSet
+			want    []string
+			members []string
+		}{
+			{
+				name:    "installs and upgrades",
+				sets:    []moduleSet{{"packages", []string{"jq", "tmux", "htop"}}, {"podman", []string{"podman"}}},
+				want:    []string{"dnf do -y --action=install htop podman --action=upgrade tmux"},
+				members: []string{"package:packages/tmux: ok (tmux)", "package:packages/htop: ok (htop)", "package:podman/podman: ok (podman)"},
+			},
+			{
+				name:    "installs",
+				sets:    []moduleSet{{"packages", []string{"jq", "htop"}}, {"podman", []string{"podman"}}},
+				want:    []string{"dnf install -y htop podman"},
+				members: []string{"package:packages/htop: ok (htop)", "package:podman/podman: ok (podman)"},
+			},
+			{
+				name:    "upgrades",
+				sets:    []moduleSet{{"packages", []string{"jq", "tmux"}}, {"shell", []string{"zsh"}}},
+				want:    []string{"dnf upgrade -y tmux zsh"},
+				members: []string{"package:packages/tmux: ok (tmux)", "package:shell/zsh: ok (zsh)"},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := fedora(t)
+				s.fakeDnf(map[string]string{"jq": "1.7.1-11.fc44", "tmux": "3.5a-3.fc44", "zsh": "5.9-15.fc44"}, []string{"htop", "podman"},
+					map[string]string{"tmux": "3.5a-4.fc44", "zsh": "5.9-16.fc44"})
+				s.on("dnf do", result(0, "Complete!\n", ""))
+				s.on("dnf install", result(0, "Complete!\n", ""))
+				s.on("dnf upgrade", result(0, "Complete!\n", ""))
 
-		members := s.members(moduleSet{"packages", []string{"jq", "tmux", "htop"}}, moduleSet{"podman", []string{"podman"}})
-		out := s.applyGroup(members)
-		want := []string{
-			"package:packages/tmux: ok (tmux)",
-			"package:packages/htop: ok (htop)",
-			"package:podman/podman: ok (podman)",
-		}
-		if got := outcomes(members, out); !slices.Equal(got, want) {
-			t.Errorf("outcomes =\n%q\nwant\n%q", got, want)
-		}
-		if got, want := s.runner.RootCommands(), []string{"dnf install -y htop podman", "dnf upgrade -y tmux"}; !slices.Equal(got, want) {
-			t.Errorf("commands run as root = %q, want %q", got, want)
+				members := s.members(tt.sets...)
+				out := s.applyGroup(members)
+				if got := outcomes(members, out); !slices.Equal(got, tt.members) {
+					t.Errorf("outcomes =\n%q\nwant\n%q", got, tt.members)
+				}
+				if got := s.runner.RootCommands(); !slices.Equal(got, tt.want) {
+					t.Errorf("commands run as root = %q, want one transaction: %q", got, tt.want)
+				}
+			})
 		}
 	})
 }
@@ -256,13 +282,14 @@ func TestApplyGroupFallback(t *testing.T) {
 		s := fedora(t)
 		s.fakeDnf(map[string]string{"tmux": "3.5a-3.fc44"}, []string{"jq", "steam"}, map[string]string{"tmux": "3.5a-4.fc44"})
 		const conflict = "Failed to resolve the transaction:\nProblem: conflicting requests\n  - nothing provides libgcc(x86-32) needed by steam-1.0.0.85-1.fc44.i686 from rpmfusion-nonfree\n"
-		s.on("dnf install", func(_ context.Context, c system.Cmd) (system.Result, error) {
+		withSteam := func(_ context.Context, c system.Cmd) (system.Result, error) {
 			if slices.Contains(c.Args, "steam") {
 				return system.Result{ExitCode: 1, Stderr: []byte(conflict)}, nil
 			}
 			return system.Result{}, nil
-		})
-		s.on("dnf upgrade", result(0, "", ""))
+		}
+		s.on("dnf do", withSteam)
+		s.on("dnf install", withSteam)
 
 		members := s.members(moduleSet{"packages", []string{"jq", "tmux"}}, moduleSet{"steam", []string{"steam"}})
 		out := s.applyGroup(members)
@@ -272,9 +299,16 @@ func TestApplyGroupFallback(t *testing.T) {
 		if got := outcomes(members, out); !slices.Equal(got, want) {
 			t.Errorf("outcomes =\n%q\nwant\n%q", got, want)
 		}
-		wantCmds := []string{"dnf install -y jq steam", "dnf install -y jq", "dnf upgrade -y tmux", "dnf install -y steam"}
+		wantCmds := []string{
+			"dnf do -y --action=install jq steam --action=upgrade tmux",
+			"dnf do -y --action=install jq --action=upgrade tmux",
+			"dnf install -y steam",
+		}
 		if got := s.runner.RootCommands(); !slices.Equal(got, wantCmds) {
 			t.Errorf("commands run as root =\n%q\nwant\n%q", got, wantCmds)
+		}
+		if want := "maisys: installing the packages of packages, steam together failed, so maisys is trying again module by module: dnf do failed with exit code 1:"; !strings.HasPrefix(s.notes.String(), want) {
+			t.Errorf("notes = %q, want them to start with %q", s.notes.String(), want)
 		}
 	})
 }
@@ -403,10 +437,10 @@ func TestApplyGroupOneModule(t *testing.T) {
 
 func TestApplyGroupLocked(t *testing.T) {
 	s := fedora(t)
-	s.fakeDnf(nil, []string{"jq", "podman"}, nil)
-	s.on("dnf install", result(1, "", "Running transaction\nTransaction failed: Failed to obtain rpm transaction lock. Another transaction is in progress.\n"))
+	s.fakeDnf(map[string]string{"tmux": "3.5a-3.fc44"}, []string{"jq", "podman"}, map[string]string{"tmux": "3.5a-4.fc44"})
+	s.on("dnf do", result(1, "", "Running transaction\nTransaction failed: Failed to obtain rpm transaction lock. Another transaction is in progress.\n"))
 
-	members := s.members(moduleSet{"packages", []string{"jq"}}, moduleSet{"podman", []string{"podman"}})
+	members := s.members(moduleSet{"packages", []string{"jq", "tmux"}}, moduleSet{"podman", []string{"podman"}})
 	out := s.applyGroup(members)
 	for i, o := range out {
 		if _, ok := errors.AsType[*lockError](o.Err); !ok {
@@ -414,7 +448,7 @@ func TestApplyGroupLocked(t *testing.T) {
 		}
 	}
 	if got := len(s.runner.RootCommands()); got != 61 {
-		t.Errorf("dnf install ran %d times, want 61: every 5 seconds for 5 minutes, and not again module by module", got)
+		t.Errorf("dnf do ran %d times, want 61: every 5 seconds for 5 minutes, and not again module by module", got)
 	}
 }
 
