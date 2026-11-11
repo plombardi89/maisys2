@@ -12,6 +12,7 @@ import (
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/facts"
 	"github.com/plombardi89/maisys2/internal/resource"
+	"github.com/plombardi89/maisys2/internal/resource/goinstall"
 	"github.com/plombardi89/maisys2/internal/resource/tool"
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/shells"
@@ -102,9 +103,9 @@ func TestResources(t *testing.T) {
 	}
 	versions := []string{"latest", "latest", "v0.9.2"}
 	for i, r := range rs[1:] {
-		p, ok := r.(*program)
+		p, ok := r.(*goinstall.Program)
 		if !ok {
-			t.Fatalf("Resources()[%d] = %T, want a *program", i+1, r)
+			t.Fatalf("Resources()[%d] = %T, want a *goinstall.Program", i+1, r)
 		}
 		if p.Version != versions[i] || p.Go != goBinary(rt) || p.Resolve == nil {
 			t.Errorf("%s: Version, Go = %q, %q, want %q, %q, with a resolver", p.ID(), p.Version, p.Go, versions[i], goBinary(rt))
@@ -139,9 +140,9 @@ func TestResourcesLastEntryWins(t *testing.T) {
 	}
 	var got []string
 	for _, r := range rs[1:] {
-		p, ok := r.(*program)
+		p, ok := r.(*goinstall.Program)
 		if !ok {
-			t.Fatalf("%s is a %T, want a *program", r.ID(), r)
+			t.Fatalf("%s is a %T, want a *goinstall.Program", r.ID(), r)
 		}
 		got = append(got, p.Package+"@"+p.Version)
 	}
@@ -246,7 +247,7 @@ func TestProgramLookupWaitsForGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (resource.Change{Action: resource.Create, Summary: "task (latest, looked up once Go is installed)"}); !reflect.DeepEqual(c, want) {
+	if want := (resource.Change{Action: resource.Create, Summary: "task (latest)"}); !reflect.DeepEqual(c, want) {
 		t.Errorf("Check() = %+v, want %+v", c, want)
 	}
 	if calls := runner.Calls(); len(calls) > 0 {

@@ -147,16 +147,12 @@ func (Module) Resources(cfg config.ModuleConfig, rt *resource.Runtime) ([]resour
 // errNoGo means a lookup needs go, which the sync hasn't installed yet.
 var errNoGo = errors.New("looking it up needs go, which isn't installed yet")
 
-// program is a Go program installed with go install. If its latest version
-// can only be looked up with go, and the toolchain isn't installed yet,
-// the plan installs it at whatever version that is: Apply looks it up, once
-// the toolchain is installed.
-type program struct {
-	*goinstall.Program
-}
-
-// newProgram returns the program pkg at version v, built with goBin.
-func newProgram(pkg, v, goBin string, env *tool.Env, rt *resource.Runtime) *program {
+// newProgram returns the program pkg at version v, built with goBin. If
+// its latest version can only be looked up with go, and the toolchain
+// isn't installed yet, the plan installs it at whatever version that is,
+// and Apply looks it up once the toolchain is installed (see
+// goinstall.Program.Check).
+func newProgram(pkg, v, goBin string, env *tool.Env, rt *resource.Runtime) *goinstall.Program {
 	direct := version.GoList(rt.Runner, goBin)
 	resolver := version.GoModule{
 		Path: pkg,
@@ -167,24 +163,14 @@ func newProgram(pkg, v, goBin string, env *tool.Env, rt *resource.Runtime) *prog
 			return direct(ctx, path)
 		},
 	}
-	return &program{Program: &goinstall.Program{
+	return &goinstall.Program{
 		Package: pkg,
 		Version: v,
 		Go:      goBin,
 		Resolve: func(ctx context.Context, _ string) (string, error) {
 			return env.Latest.Resolve(ctx, env.Client, pkg, resolver)
 		},
-	}}
-}
-
-// Check checks the program, unless its latest version can't be looked up
-// until the toolchain is installed: then it's to be installed.
-func (p *program) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
-	c, err := p.Program.Check(ctx, rt)
-	if errors.Is(err, errNoGo) {
-		return resource.Change{Action: resource.Create, Summary: p.Name() + " (latest, looked up once Go is installed)"}, nil
 	}
-	return c, err
 }
 
 // ShellEnv sets GOPATH to ~/go, Go's default, and adds ~/.local/bin, where
