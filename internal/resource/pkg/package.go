@@ -50,16 +50,17 @@ var _ resource.Grouped = (*Package)(nil)
 // packages' checks check them again, so their checks must be safe to run
 // at the same time as each other.
 func Set(rt *resource.Runtime, module string, names []string, from ...resource.Resource) []resource.Resource {
-	if m, err := ManagerFor(rt); err == nil {
-		m.want(names...)
-	}
 	rs := make([]resource.Resource, 0, len(names))
-	var seen []string
+	pkgs := make([]*Package, 0, len(names))
 	for _, name := range names {
-		if !slices.Contains(seen, name) {
-			seen = append(seen, name)
-			rs = append(rs, &Package{module: module, name: name, from: from})
+		if !slices.ContainsFunc(pkgs, func(p *Package) bool { return p.name == name }) {
+			p := &Package{module: module, name: name, from: from}
+			pkgs = append(pkgs, p)
+			rs = append(rs, p)
 		}
+	}
+	if m, err := ManagerFor(rt); err == nil {
+		m.want(pkgs)
 	}
 	return rs
 }
@@ -84,8 +85,11 @@ func (p *Package) Group() string { return Group }
 
 // Check finds whether the package needs installing or upgrading. A name
 // the enabled repos don't have is an error, unless the package may come
-// from something the same sync adds. A package held at its version
-// (apt-mark hold) isn't upgraded: the plan notes that it's held.
+// from something the same sync adds; on Fedora, if the repos have packages
+// that provide it, the error names them. A package held at its version
+// (apt-mark hold) isn't upgraded: the plan notes that it's held. If apt's
+// lists are stale and the plan couldn't refresh them, the sync's first
+// package notes that.
 func (p *Package) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	m, err := ManagerFor(rt)
 	if err != nil {
@@ -95,6 +99,22 @@ func (p *Package) Check(ctx context.Context, rt *resource.Runtime) (resource.Cha
 	if err != nil {
 		return resource.Change{}, err
 	}
+	c, err := p.change(ctx, rt, in)
+	if err != nil {
+		return resource.Change{}, err
+	}
+	if in.installed && !p.upgrade {
+		m.isCurrent(p)
+	}
+	if note := m.listsNote(p); note != "" {
+		c.Notes = append(c.Notes, note)
+	}
+	return c, nil
+}
+
+// change returns the change the package needs, given what looking it up
+// found.
+func (p *Package) change(ctx context.Context, rt *resource.Runtime, in info) (resource.Change, error) {
 	p.upgrade = in.installed && in.newer != "" && !in.held
 	switch {
 	case p.upgrade:
@@ -107,9 +127,26 @@ func (p *Package) Check(ctx context.Context, rt *resource.Runtime) (resource.Cha
 		return resource.Change{Action: resource.Create, Summary: "install " + p.name}, nil
 	case in.noCandidate:
 		return resource.Change{}, fmt.Errorf("unknown package %s: the enabled repos have nothing to install for it (is it a virtual package? List the package that provides it instead)", p.name)
+	case len(in.providers) > 0:
+		return resource.Change{}, providedError(p.name, in.providers)
 	default:
 		return resource.Change{}, fmt.Errorf("unknown package %s: the enabled repos don't have it", p.name)
 	}
+}
+
+// providedError is the error for name, which isn't a package name, but
+// which providers provide, such as vim, which vim-enhanced provides. It
+// names the first few.
+func providedError(name string, providers []string) error {
+	const shown = 3
+	if len(providers) == 1 {
+		return fmt.Errorf("%s isn't a package name: %s provides it, so list that", name, providers[0])
+	}
+	list := strings.Join(providers[:len(providers)-1], ", ") + " and " + providers[len(providers)-1]
+	if len(providers) > shown {
+		list = fmt.Sprintf("%s and %d others", strings.Join(providers[:shown], ", "), len(providers)-shown)
+	}
+	return fmt.Errorf("%s isn't a package name: %s provide it, so list one of those", name, list)
 }
 
 // fromPending reports whether something the package may come from has a
@@ -132,10 +169,13 @@ func (p *Package) Apply(ctx context.Context, rt *resource.Runtime) (state.Record
 
 // ApplyGroup installs and upgrades the packages of members, from every
 // module, in one transaction: one apt-get install, or on Fedora one dnf
-// install and one dnf upgrade. If that fails, it tries again module by
-// module, so that only the modules whose packages can't be installed fail,
-// each with its own error. On Ubuntu, it refreshes the package lists first
-// if they're out of date.
+// install, dnf upgrade, or dnf do for both. If that fails, it tries again
+// module by module, so that only the modules whose packages can't be
+// installed fail, each with its own error. On Ubuntu, it refreshes the
+// package lists first if they're out of date. The plan may not have seen
+// the upgrades the refreshed lists have, as when sudo needed a password to
+// refresh them then: the members' modules' other packages get those
+// upgrades too, so that they're all at their latest version.
 func (p *Package) ApplyGroup(ctx context.Context, rt *resource.Runtime, members []resource.Member) []resource.Outcome {
 	out := make([]resource.Outcome, len(members))
 	pkgs := make([]*Package, len(members))
@@ -205,12 +245,19 @@ func retryless(ctx context.Context, err error) bool {
 
 // applyPackages installs or upgrades the packages in pkgs that aren't nil,
 // as their checks found they need. Names in several modules are installed
-// once.
+// once. If apt's lists were refreshed after the plan looked the packages
+// up, their modules' packages that were up to date then get the upgrades
+// the refreshed lists have too.
 func (m *Manager) applyPackages(ctx context.Context, pkgs []*Package) error {
-	var install, upgrade []string
+	var install, upgrade, modules []string
 	for _, pp := range pkgs {
+		if pp == nil {
+			continue
+		}
+		if !slices.Contains(modules, pp.module) {
+			modules = append(modules, pp.module)
+		}
 		switch {
-		case pp == nil:
 		case pp.upgrade:
 			if !slices.Contains(upgrade, pp.name) {
 				upgrade = append(upgrade, pp.name)
@@ -225,7 +272,14 @@ func (m *Manager) applyPackages(ctx context.Context, pkgs []*Package) error {
 	if err := m.refresh(ctx); err != nil {
 		return err
 	}
-	return m.backend.install(ctx, m, install, upgrade)
+	more, err := m.missedUpgrades(ctx, modules, slices.Concat(install, upgrade))
+	if err != nil {
+		return err
+	}
+	if len(more) > 0 {
+		m.notify("the refreshed package lists have upgrades the plan couldn't show, so they're made too: %s", strings.Join(more, ", "))
+	}
+	return m.backend.install(ctx, m, install, append(upgrade, more...))
 }
 
 // Remover handles the records of packages taken out of the config. maisys

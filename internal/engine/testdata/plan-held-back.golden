@@ -1,0 +1,8 @@
+Plan for phil-workp14s (ubuntu 26.04, amd64)
+
+files
+  + ~/.gitconfig
+golang (skipped because it depends on packages, which --only leaves out: add it to --only)
+legacy (skipped because it depends on packages and kubectl, which --only leaves out: add them to --only)
+
+1 to change.

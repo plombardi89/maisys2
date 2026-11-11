@@ -68,7 +68,8 @@ type PlanInput struct {
 	// Only limits the sync to these modules, if it isn't empty: only
 	// their resources are checked and applied, and only their records
 	// removed. The other enabled modules still list their resources, so
-	// that nothing one of them has is removed.
+	// that nothing one of them has is removed. A module that depends on an
+	// enabled module Only leaves out is held back (see Plan.HeldBack).
 	Only []string
 	// Parallel is how many checks run at once. Zero means
 	// DefaultParallel.
@@ -104,6 +105,10 @@ type Plan struct {
 	// Modules are the enabled modules that have resources, in the order
 	// they're applied.
 	Modules []*ModulePlan
+	// HeldBack are the modules the sync is limited to (PlanInput.Only)
+	// that are left out of Modules, because they depend on enabled modules
+	// it leaves out, in the order they'd be applied.
+	HeldBack []*HeldBack
 	// Removals are the records in the state file that are no longer
 	// wanted, in the order they're removed.
 	Removals []*Removal
@@ -125,6 +130,19 @@ type ModulePlan struct {
 	// SkippedBecause names the failed module this one depends on, directly
 	// or not, if there is one. A module that's skipped isn't applied.
 	SkippedBecause string
+}
+
+// HeldBack is a module the sync is limited to that isn't checked or
+// applied, nor are its records removed, because the modules it depends on
+// must be applied first, and the sync leaves some of them out. That isn't
+// a failure.
+type HeldBack struct {
+	// Name is the module's name.
+	Name string
+	// Needs names the enabled modules the sync leaves out that the module
+	// depends on, directly or through other modules of the sync, in the
+	// order PlanInput.Modules lists them.
+	Needs []string
 }
 
 // Item is a resource and the change its check found.
@@ -150,15 +168,16 @@ type Removal struct {
 }
 
 // NewPlan checks every resource of the enabled modules (only those in
-// in.Only, if it's set) against the live system, and finds the records in
-// the state file that are no longer wanted: those of resources no enabled
-// module has. Checks run in parallel and never ask for a password: a check
-// that needs one is checked during apply. A check that fails makes its
-// module fail, which the plan shows. If an enabled module can't list its
-// resources, the plan removes nothing, and warns why. NewPlan returns an
+// in.Only, if it's set, except those it holds back: see Plan.HeldBack)
+// against the live system, and finds the records in the state file that
+// are no longer wanted: those of resources no enabled module has. Checks
+// run in parallel and never ask for a password: a check that needs one is
+// checked during apply. A check that fails makes its module fail, which
+// the plan shows. If an enabled module can't list its resources, the plan
+// removes nothing, and warns why. NewPlan returns an
 // error if the modules can't be ordered, if two resources have the same
-// ID, if in.Only names a module that doesn't exist, or if a change needs
-// sudo and sudo is missing or the user may not use it.
+// ID or the same target, if in.Only names a module that doesn't exist, or
+// if a change needs sudo and sudo is missing or the user may not use it.
 func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 	if in.Machine == nil {
 		return nil, errors.New("planning needs the machine's config")
@@ -205,14 +224,21 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	mods, p.HeldBack = holdBack(in, mods, selected)
+	// The records of held back modules aren't removed either.
+	syncs := func(name string) bool {
+		return selected(name) && !slices.ContainsFunc(p.HeldBack, func(h *HeldBack) bool { return h.Name == name })
+	}
 
 	// Every enabled module lists its resources, whether or not the sync is
 	// limited to it, and owner maps each resource's ID to its module. A
 	// record whose ID owner has is never removed, whichever module it
 	// names: a resource can move to another module, and its record may
 	// still name the old one. If a module can't list its resources, any of
-	// them might have a record, so nothing is removed.
+	// them might have a record, so nothing is removed. No two resources
+	// may write the same path, which claims maps to the one that does.
 	owner := map[string]string{}
+	claims := map[string]claim{}
 	listed := map[string][]resource.Resource{}
 	unlisted := map[string]error{}
 	for _, mod := range enabled(in, func(string) bool { return true }) {
@@ -224,6 +250,9 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 			continue
 		}
 		if err := own(owner, name, resources); err != nil {
+			return nil, err
+		}
+		if err := claimTargets(claims, name, resources, in.Paths.Home, in.Machine.OS == config.Windows); err != nil {
 			return nil, err
 		}
 		listed[name] = resources
@@ -244,7 +273,7 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 	}
 
 	if len(unlisted) == 0 {
-		p.Removals = removals(in, st, owner, selected)
+		p.Removals = removals(in, st, owner, syncs)
 	}
 	p.check(ctx, cmp.Or(in.Parallel, DefaultParallel))
 	if err := ctx.Err(); err != nil {
@@ -314,6 +343,50 @@ func enabled(in PlanInput, selected func(string) bool) []Module {
 		}
 	}
 	return mods
+}
+
+// holdBack returns mods, the enabled modules the sync is limited to in
+// dependency order, without those that depend on an enabled module in.Only
+// leaves out, directly or through another of mods, and returns those as
+// held back. Without in.Only, it holds back nothing.
+func holdBack(in PlanInput, mods []Module, selected func(string) bool) ([]Module, []*HeldBack) {
+	if len(in.Only) == 0 {
+		return mods, nil
+	}
+	rank := map[string]int{}
+	for i, mod := range in.Modules {
+		rank[mod.Info().Name] = i
+	}
+	isEnabled := map[string]bool{}
+	for _, mod := range enabled(in, func(string) bool { return true }) {
+		isEnabled[mod.Info().Name] = true
+	}
+
+	needs := map[string][]string{}
+	var kept []Module
+	var held []*HeldBack
+	for _, mod := range mods {
+		name := mod.Info().Name
+		var missing []string
+		for _, dep := range mod.DependsOn() {
+			switch {
+			case !isEnabled[dep]:
+			case !selected(dep):
+				missing = append(missing, dep)
+			default:
+				// mods is in dependency order, so needs[dep] is known.
+				missing = append(missing, needs[dep]...)
+			}
+		}
+		if len(missing) == 0 {
+			kept = append(kept, mod)
+			continue
+		}
+		slices.SortFunc(missing, func(a, b string) int { return cmp.Compare(rank[a], rank[b]) })
+		needs[name] = slices.Compact(missing)
+		held = append(held, &HeldBack{Name: name, Needs: needs[name]})
+	}
+	return kept, held
 }
 
 // own adds the resources of module name to owner, which maps each ID to

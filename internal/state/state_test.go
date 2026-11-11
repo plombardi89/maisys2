@@ -492,7 +492,7 @@ func TestMigrate(t *testing.T) {
 			}
 
 			var ran []int
-			got, saved, err := load(path, 3, testSteps(&ran))
+			got, saved, err := load(path, 3, testSteps(&ran), true)
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
@@ -521,7 +521,7 @@ func TestMigrate(t *testing.T) {
 				t.Errorf("migrated file isn't in format 3:\n%s", file)
 			}
 			ran = nil
-			again, _, err := load(path, 3, testSteps(&ran))
+			again, _, err := load(path, 3, testSteps(&ran), true)
 			if err != nil {
 				t.Fatalf("loading the migrated file: %v", err)
 			}
@@ -530,6 +530,66 @@ func TestMigrate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMigrateWithoutSaving(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	content := `{"format_version": 1, "host": "box", "records": [{"id": "tool:go", "kind": "tool", "owner": "golang"}]}`
+	writeTestFile(t, path, content)
+
+	var ran []int
+	got, saved, err := load(path, 3, testSteps(&ran), false)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want := view{FormatVersion: 3, Machine: "box", Records: []Record{{ID: "tool:go", Kind: "tool", Module: "golang"}}}
+	if !reflect.DeepEqual(viewOf(got), want) {
+		t.Errorf("load = %+v\nwant %+v", viewOf(got), want)
+	}
+	if !slices.Equal(ran, []int{1, 2}) {
+		t.Errorf("migrations run = %v, want [1 2]", ran)
+	}
+	if saved != nil {
+		t.Errorf("load says the file holds\n%s\nbut it wasn't saved", saved)
+	}
+	if got := readTestFile(t, path); got != content {
+		t.Errorf("file changed to %q", got)
+	}
+	checkOnly(t, dir, "state.json")
+}
+
+func TestReadWritesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "maisys")
+	path := filepath.Join(dir, "state.json")
+	s, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if want := (view{FormatVersion: FormatVersion}); !reflect.DeepEqual(viewOf(s), want) {
+		t.Errorf("Read = %+v, want %+v", viewOf(s), want)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Read of a missing file left %s behind: %v", dir, err)
+	}
+
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, path, exampleFile)
+	s, err = Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	want := exampleState(exampleRecords())
+	want.FormatVersion = FormatVersion
+	if !reflect.DeepEqual(viewOf(s), viewOf(want)) {
+		t.Errorf("Read = %+v\nwant %+v", viewOf(s), viewOf(want))
+	}
+	if got := readTestFile(t, path); got != exampleFile {
+		t.Errorf("file changed to %q", got)
+	}
+	checkOnly(t, dir, "state.json")
 }
 
 func TestMigrateErrors(t *testing.T) {
@@ -572,7 +632,7 @@ func TestMigrateErrors(t *testing.T) {
 			path := filepath.Join(dir, "state.json")
 			writeTestFile(t, path, tt.content)
 
-			_, _, err := load(path, 3, tt.steps)
+			_, _, err := load(path, 3, tt.steps, true)
 			if want := path + tt.want; err == nil || err.Error() != want {
 				t.Errorf("load error = %v\nwant %s", err, want)
 			}

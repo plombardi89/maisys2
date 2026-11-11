@@ -25,6 +25,9 @@ type ApplyInput struct {
 	Abort context.Context
 	// Progress, if set, receives a line for each step as it starts.
 	Progress io.Writer
+	// Out, if set, is the terminal, which steps show things on as they
+	// run (see resource.Runtime.Out). It's never the log.
+	Out io.Writer
 }
 
 // Result is what applying a plan did.
@@ -120,6 +123,7 @@ func Apply(ctx context.Context, p *Plan, in ApplyInput) *Result {
 	}
 
 	in.Store.Machine = p.Machine
+	p.rt.Out = in.Out
 	if !a.done() && p.NeedsPrivileges() && p.rt.Machine.OS != config.Windows {
 		if sudo, ok := p.rt.Runner.(system.SudoRunner); ok {
 			if a.sudoErr = sudo.StartSudo(a.step); a.sudoErr == nil {

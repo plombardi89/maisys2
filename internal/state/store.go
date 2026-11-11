@@ -15,7 +15,7 @@ type Store struct {
 
 // Open loads the state file at path, as Load does, to keep it up to date.
 func Open(path string) (*Store, error) {
-	s, data, err := load(path, FormatVersion, migrations)
+	s, data, err := load(path, FormatVersion, migrations, true)
 	if err != nil {
 		return nil, err
 	}

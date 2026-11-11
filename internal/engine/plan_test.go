@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,6 +175,130 @@ func TestPlanDuplicateIDs(t *testing.T) {
 	}
 }
 
+func TestPlanOwnership(t *testing.T) {
+	// writes returns a fake resource with id that writes targets.
+	writes := func(id string, targets ...string) *fakeResource {
+		r := res(id, resource.Create, "")
+		r.targets = targets
+		return r
+	}
+	tests := []struct {
+		name  string
+		setup func(e *testEnv)
+		want  string // "" if there's no error
+	}{
+		{
+			name: "two modules",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:~/.zshrc", "~/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+			},
+			want: "modules files and shell both write ~/.zshrc (file:~/.zshrc and shell-rc:zsh)",
+		},
+		{
+			name: "one module",
+			setup: func(e *testEnv) {
+				e.add("golang", nil,
+					writes("tool:golang", "~/.local/share/maisys/tools/go", "~/.local/bin/go", "~/.local/bin/gofmt"),
+					writes("symlink:~/.local/bin/go", "~/.local/bin/go"),
+				)
+			},
+			want: "module golang has two resources that write ~/.local/bin/go (tool:golang and symlink:~/.local/bin/go)",
+		},
+		{
+			name: "the home folder written out",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:~/.zshrc", "/home/phil/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+			},
+			want: "modules files and shell both write ~/.zshrc (file:~/.zshrc and shell-rc:zsh)",
+		},
+		{
+			name: "paths that aren't clean",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:a", "~/.config/nvim/init.lua"))
+				e.add("nvim", nil, writes("file:b", "~/.config//nvim/./lua/../init.lua"))
+			},
+			want: "modules files and nvim both write ~/.config//nvim/./lua/../init.lua (file:a and file:b)",
+		},
+		{
+			name: "outside the home folder",
+			setup: func(e *testEnv) {
+				e.add("sudo", nil, writes("sudoers:phil", "/etc/sudoers.d/phil"))
+				e.add("files", nil, writes("file:sudoers", "/etc/sudoers.d/phil/"))
+			},
+			want: "modules sudo and files both write /etc/sudoers.d/phil/ (sudoers:phil and file:sudoers)",
+		},
+		{
+			name: "Windows paths ignore case",
+			setup: func(e *testEnv) {
+				e.windows()
+				e.add("wsl_host", nil, writes("file:~/.wslconfig", `~\.wslconfig`))
+				e.add("files", nil, writes("file:wslconfig", `C:\Users\Phil\.WSLConfig`))
+			},
+			want: `modules wsl_host and files both write C:\Users\Phil\.WSLConfig (file:~/.wslconfig and file:wslconfig)`,
+		},
+		{
+			name: "Linux paths don't",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:a", "~/.zshrc"))
+				e.add("shell", nil, writes("file:b", "~/.ZSHRC"))
+			},
+		},
+		{
+			name: "inside a folder another resource writes",
+			setup: func(e *testEnv) {
+				e.add("shell", nil,
+					writes("git-checkout:omz", "~/.oh-my-zsh"),
+					writes("symlink:theme", "~/.oh-my-zsh/custom/themes/theme.zsh-theme"),
+				)
+				e.add("files", nil, writes("file:plugin", "~/.oh-my-zsh/custom/plugins/plugin.zsh"))
+			},
+		},
+		{
+			name: "the same path twice in one resource",
+			setup: func(e *testEnv) {
+				e.add("golang", nil, writes("tool:golang", "~/.local/bin/go", "/home/phil/.local/bin/go"))
+			},
+		},
+		{
+			name: "a module left out by only",
+			setup: func(e *testEnv) {
+				e.only = []string{"files"}
+				e.add("files", nil, writes("file:~/.zshrc", "~/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+			},
+			want: "modules files and shell both write ~/.zshrc (file:~/.zshrc and shell-rc:zsh)",
+		},
+		{
+			name: "a module that's turned off",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:~/.zshrc", "~/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+				e.disable("shell")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			tt.setup(e)
+			in := e.input()
+			in.Paths.Home = "/home/phil"
+			if e.machine.OS == config.Windows {
+				in.Paths.Home = `C:\Users\phil`
+			}
+			_, err := NewPlan(t.Context(), in)
+			switch {
+			case tt.want == "" && err != nil:
+				t.Errorf("NewPlan() error = %v, want none", err)
+			case tt.want != "" && (err == nil || err.Error() != tt.want):
+				t.Errorf("NewPlan() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlanDependencyOrder(t *testing.T) {
 	type mod struct {
 		name     string
@@ -209,6 +335,12 @@ func TestPlanDependencyOrder(t *testing.T) {
 		{
 			name:    "dependency left out by only",
 			modules: []mod{{name: "mage", deps: []string{"golang"}}, {name: "golang"}, {name: "files"}},
+			only:    []string{"files", "mage"},
+			want:    []string{"files"},
+		},
+		{
+			name:    "disabled dependency left out by only",
+			modules: []mod{{name: "mage", deps: []string{"golang"}}, {name: "golang", disabled: true}, {name: "files"}},
 			only:    []string{"files", "mage"},
 			want:    []string{"mage", "files"},
 		},
@@ -318,6 +450,124 @@ func TestPlanOnly(t *testing.T) {
 			t.Errorf("NewPlan() error = %v, want %q", err, want)
 		}
 	})
+}
+
+// TestPlanOnlyHoldsBack limits syncs to modules that depend on others:
+// those that depend on an enabled module the sync leaves out aren't
+// checked, applied or pruned, and that isn't a failure.
+func TestPlanOnlyHoldsBack(t *testing.T) {
+	tests := []struct {
+		name         string
+		only         []string
+		disabled     []string
+		wantModules  []string
+		wantHeld     []HeldBack
+		wantRemovals []string
+	}{
+		{
+			name:         "dependencies left out",
+			only:         []string{"legacy", "files"},
+			wantModules:  []string{"files"},
+			wantHeld:     []HeldBack{{Name: "legacy", Needs: []string{"golang", "kubectl"}}},
+			wantRemovals: []string{"file:~/.vimrc"},
+		},
+		{
+			name:        "a dependency left out",
+			only:        []string{"kubectl", "legacy"},
+			wantModules: []string{"kubectl"},
+			wantHeld:    []HeldBack{{Name: "legacy", Needs: []string{"golang"}}},
+		},
+		{
+			name:         "dependencies included",
+			only:         []string{"legacy", "golang", "kubectl", "packages"},
+			wantModules:  []string{"packages", "golang", "kubectl", "legacy"},
+			wantRemovals: []string{"cleanup:~/.ansible"},
+		},
+		{
+			name:         "dependencies that aren't enabled",
+			only:         []string{"legacy"},
+			disabled:     []string{"golang", "kubectl"},
+			wantModules:  []string{"legacy"},
+			wantRemovals: []string{"cleanup:~/.ansible"},
+		},
+		{
+			name: "a dependency left out by a dependency",
+			only: []string{"mage", "golang"},
+			wantHeld: []HeldBack{
+				{Name: "golang", Needs: []string{"packages"}},
+				{Name: "mage", Needs: []string{"packages"}},
+			},
+		},
+		{
+			name:         "every module",
+			wantModules:  []string{"packages", "golang", "kubectl", "legacy", "mage", "files"},
+			wantRemovals: []string{"file:~/.vimrc", "cleanup:~/.ansible"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.only = tt.only
+			var checked sync.Map
+			add := func(name string, deps ...string) {
+				r := res("fake:"+name, resource.Create, name)
+				r.onCheck = func(context.Context, *resource.Runtime) (resource.Change, error) {
+					checked.Store(name, true)
+					return r.change, nil
+				}
+				e.add(name, deps, r)
+			}
+			add("packages")
+			add("golang", "packages")
+			add("kubectl")
+			add("legacy", "golang", "kubectl")
+			add("mage", "golang")
+			add("files")
+			for _, name := range tt.disabled {
+				e.disable(name)
+			}
+			e.record("cleanup:~/.ansible", "cleanup", "legacy")
+			e.record("file:~/.vimrc", "file", "files")
+			e.remover(&fakeRemover{kind: "cleanup", change: resource.Change{Action: resource.Remove}})
+			e.remover(&fakeRemover{kind: "file", change: resource.Change{Action: resource.Remove}})
+
+			p := e.plan()
+			if got := names(p); !slices.Equal(got, tt.wantModules) {
+				t.Errorf("modules = %q, want %q", got, tt.wantModules)
+			}
+			var held []HeldBack
+			for _, h := range p.HeldBack {
+				held = append(held, *h)
+				if _, ok := checked.Load(h.Name); ok {
+					t.Errorf("%s is held back, but its resources were checked", h.Name)
+				}
+			}
+			if !reflect.DeepEqual(held, tt.wantHeld) {
+				t.Errorf("held back = %+v, want %+v", held, tt.wantHeld)
+			}
+			if got := removalIDs(p); !slices.Equal(got, tt.wantRemovals) {
+				t.Errorf("removals = %q, want %q", got, tt.wantRemovals)
+			}
+			if p.Failed() {
+				t.Error("Failed() = true, want false")
+			}
+
+			result := Apply(t.Context(), p, ApplyInput{Store: e.store})
+			if !result.OK() || result.ExitCode() != 0 {
+				t.Errorf("OK(), ExitCode() = %t, %d; want true, 0", result.OK(), result.ExitCode())
+			}
+			var want []string
+			for _, name := range tt.wantModules {
+				want = append(want, "apply fake:"+name)
+			}
+			for _, id := range tt.wantRemovals {
+				want = append(want, "remove "+id)
+			}
+			if got := e.steps.get(); !slices.Equal(got, want) {
+				t.Errorf("steps = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestPlanRemovals(t *testing.T) {

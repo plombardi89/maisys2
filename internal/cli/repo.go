@@ -49,7 +49,7 @@ func (g *globalOptions) openRepo(cmd *cobra.Command, strict bool) (*configRepo, 
 
 	r := &configRepo{}
 	if pathsErr == nil {
-		s, err := settings.Load(settingsFile)
+		s, err := settings.Read(settingsFile)
 		switch {
 		case errors.Is(err, settings.ErrNoSettings):
 		case err != nil:

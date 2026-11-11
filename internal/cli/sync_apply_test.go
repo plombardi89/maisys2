@@ -446,6 +446,32 @@ func TestSyncOnly(t *testing.T) {
 	}
 }
 
+// TestSyncOnlyHoldsBack limits a sync to a module without the one it
+// depends on: the plan says so, nothing is applied, and the sync works.
+func TestSyncOnlyHoldsBack(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry run %t", dryRun), func(t *testing.T) {
+			e := newTestEnv(t)
+			mods := []*fakeModule{fake("alpha", nil, "fake:a"), fake("beta", []string{"alpha"}, "fake:b")}
+			e.useFakes(mods...)
+
+			args := []string{"sync", "--local", "--yes", "--only", "beta"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			code, stdout, stderr := e.run(args...)
+			want := boxPlan + "\nbeta (skipped because it depends on alpha, which --only leaves out: add it to --only)\n\nNothing to change.\n"
+			if code != exitOK || stdout != want || stderr != "" {
+				t.Errorf("exit code = %d, stdout:\n%s\nstderr:\n%s\nwant %d, stdout:\n%s", code, stdout, stderr, exitOK, want)
+			}
+			wantApplied(t, mods)
+			if n := mods[1].resources[0].checks.Load(); n != 0 {
+				t.Errorf("checked fake:b %d times, want none", n)
+			}
+		})
+	}
+}
+
 func TestSyncWrongSystem(t *testing.T) {
 	e := newTestEnv(t)
 	alpha := fake("alpha", nil, "fake:a")

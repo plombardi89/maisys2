@@ -293,6 +293,7 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 	// Reading the caches now means one written by a newer maisys stops the
 	// sync before it plans anything.
 	tools := tool.NewEnv(s.paths, "maisys/"+buildinfo.Version())
+	tools.Latest.DryRun = s.opts.dryRun
 	if err := tools.Load(); err != nil {
 		return err
 	}
@@ -400,7 +401,7 @@ func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log, run
 	ctx, out := s.cmd.Context(), s.cmd.OutOrStdout()
 	changes := p.HasChanges()
 	progress := &countingWriter{w: out}
-	in := engine.ApplyInput{Store: store}
+	in := engine.ApplyInput{Store: store, Out: out}
 	if changes {
 		_, _ = fmt.Fprintln(out)
 		in.Progress = progress

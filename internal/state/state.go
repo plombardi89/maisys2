@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/plombardi89/maisys2/internal/fsutil"
 )
 
 // FormatVersion is the state file format this maisys reads and writes.
@@ -150,15 +152,26 @@ var migrations = map[int]migration{}
 // Load reads the state file at path. A missing file is an empty state:
 // maisys hasn't synced on this machine yet. If the file is in an older
 // format, Load migrates it and saves it in the current format, after
-// keeping a copy of the old file next to it as <name>.v<N>.bak.
+// keeping a copy of the old file next to it as <name>.v<N>.bak, so only
+// commands that hold the lock, as sync does, may use it: others use Read.
 func Load(path string) (*State, error) {
-	s, _, err := load(path, FormatVersion, migrations)
+	s, _, err := load(path, FormatVersion, migrations, true)
 	return s, err
 }
 
-// load is Load, for format version current and the migrations in steps. It
-// also returns what the file holds after loading, or nil if there's no file.
-func load(path string, current int, steps map[int]migration) (*State, []byte, error) {
+// Read reads the state file at path as Load does, but never writes
+// anything: a file in an older format is only migrated in memory. It's for
+// commands that only report, such as status, which don't take the lock and
+// so mustn't replace a file a sync may be saving.
+func Read(path string) (*State, error) {
+	s, _, err := load(path, FormatVersion, migrations, false)
+	return s, err
+}
+
+// load is Load, or Read unless save is set, for format version current and
+// the migrations in steps. It also returns what the file holds after
+// loading, or nil if there's no file or it holds an older format.
+func load(path string, current int, steps map[int]migration, save bool) (*State, []byte, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &State{FormatVersion: current}, nil, nil
@@ -180,7 +193,7 @@ func load(path string, current int, steps map[int]migration) (*State, []byte, er
 		return nil, nil, fmt.Errorf("%s was written by a newer version of maisys (format_version %d; this version reads up to %d): update maisys and try again",
 			path, *head.FormatVersion, current)
 	case *head.FormatVersion < current:
-		return migrate(path, data, *head.FormatVersion, current, steps)
+		return migrate(path, data, *head.FormatVersion, current, steps, save)
 	}
 
 	s, err := decode(data)
@@ -191,8 +204,9 @@ func load(path string, current int, steps map[int]migration) (*State, []byte, er
 }
 
 // migrate upgrades data, the contents of path, from format version from to
-// current, and saves the result after keeping a copy of the old file.
-func migrate(path string, data []byte, from, current int, steps map[int]migration) (*State, []byte, error) {
+// current. With save, it saves the result after keeping a copy of the old
+// file.
+func migrate(path string, data []byte, from, current int, steps map[int]migration, save bool) (*State, []byte, error) {
 	var obj map[string]any
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -217,6 +231,9 @@ func migrate(path string, data []byte, from, current int, steps map[int]migratio
 	if err != nil {
 		// Positions would refer to the migrated file, which isn't saved.
 		return nil, nil, decodeError(fmt.Sprintf("%s, migrated to format_version %d", path, current), nil, err)
+	}
+	if !save {
+		return s, nil, nil
 	}
 
 	if err := backup(path, data, from); err != nil {
@@ -420,5 +437,5 @@ func writeFile(name string, data []byte) (err error) {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), name)
+	return fsutil.Rename(f.Name(), name)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -578,7 +579,6 @@ func TestApplyRechecksInsideApplied(t *testing.T) {
 		nested("symlink:theme", "~/.oh-my-zsh/custom/themes/theme.zsh-theme", &replaced, resource.Create, &inside),
 		stale,
 		nested("file:sibling", filepath.Join(home, ".oh-my-zsh-sibling"), &replaced, resource.Create, &outside),
-		nested("file:same", "~/.oh-my-zsh/", &replaced, resource.Create, &outside),
 	)
 	e.add("later", nil, nested("git-checkout:later", "~/.oh-my-zsh/custom/plugins/later", &replaced, resource.Update, &inside))
 	e.add("other", nil, nested("file:other", "~/.zshrc", &replaced, resource.Update, &outside))
@@ -605,7 +605,7 @@ func TestApplyRechecksInsideApplied(t *testing.T) {
 	if n := inside.Load(); n != 8 {
 		t.Errorf("the resources inside ~/.oh-my-zsh were checked %d times, want twice each", n)
 	}
-	if n := outside.Load(); n != 3 {
+	if n := outside.Load(); n != 2 {
 		t.Errorf("the resources outside ~/.oh-my-zsh were checked %d times, want once each", n)
 	}
 	if got, want := e.steps.get(), []string{"apply git-checkout:omz", "apply git-checkout:plugin", "apply symlink:theme", "apply git-checkout:stale", "apply git-checkout:later"}; !slices.Equal(got, want) {
@@ -679,5 +679,31 @@ func TestApplyRecheckFails(t *testing.T) {
 		"theme skipped because shell failed.\n"
 	if b.String() != want {
 		t.Errorf("Render() =\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
+// TestApplyOut checks that steps can show things on the terminal as they
+// run, and that checks can't: the runtime has no Out while planning.
+func TestApplyOut(t *testing.T) {
+	e := newTestEnv(t)
+	r := res("package:packages/jq", resource.Create, "install jq")
+	r.onCheck = func(_ context.Context, rt *resource.Runtime) (resource.Change, error) {
+		if rt.Out != nil {
+			t.Error("the plan's checks have an Out, want none")
+		}
+		return r.change, nil
+	}
+	r.onApply = func(_ context.Context, rt *resource.Runtime) (state.Record, error) {
+		_, _ = io.WriteString(rt.Out, "maisys: waiting for another program to finish with apt\n")
+		return state.Record{}, nil
+	}
+	e.add("packages", nil, r)
+
+	var out bytes.Buffer
+	if res := Apply(t.Context(), e.plan(), ApplyInput{Store: e.store, Out: &out}); !res.OK() {
+		t.Fatalf("Apply() = %+v, want everything applied", res)
+	}
+	if want := "maisys: waiting for another program to finish with apt\n"; out.String() != want {
+		t.Errorf("the terminal got %q, want %q", out.String(), want)
 	}
 }

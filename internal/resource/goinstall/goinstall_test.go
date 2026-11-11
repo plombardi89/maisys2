@@ -3,12 +3,16 @@ package goinstall
 import (
 	"bytes"
 	"context"
+	"debug/plan9obj"
+	encbinary "encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -23,61 +27,60 @@ import (
 
 const taskPkg = "github.com/go-task/task/v3/cmd/task"
 
-// versionM returns realistic go version -m output for a binary at bin
-// built from package pkg of module mod at version v.
-func versionM(bin, pkg, mod, v string) string {
-	return bin + ": go1.26.1\n" +
-		"\tpath\t" + pkg + "\n" +
-		"\tmod\t" + mod + "\t" + v + "\th1:VO2moBcbUaVlCLmpQI9c7GT3vJ8JrIpylS+TJq53FMQ=\n" +
-		"\tdep\tcel.dev/expr\tv0.25.1\th1:1KrZg61W6TWSxuNZ37Xy49ps13NUovb66QLprthtwi4=\n" +
-		"\tdep\tgithub.com/Masterminds/semver/v3\tv3.4.0\th1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=\n" +
-		"\t=>\tgithub.com/fork/semver/v3\tv3.4.1\th1:4CRtRnuZOdFDTWSff9r8QFt/9+z6Emubz3aDMnf/dx0=\n" +
-		"\tbuild\t-buildmode=exe\n" +
-		"\tbuild\t-compiler=gc\n" +
-		"\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n" +
-		"\tbuild\tCGO_ENABLED=0\n" +
-		"\tbuild\tGOARCH=amd64\n" +
-		"\tbuild\tGOOS=linux\n" +
-		"\tbuild\tGOAMD64=v1\n"
+// writeGoBinary writes a file debug/buildinfo reads as a Go program built
+// from package pkg of module mod at version v: a Plan 9 a.out, the simplest
+// executable format it reads, whose data segment is the build information
+// the Go linker writes.
+func writeGoBinary(t *testing.T, name, pkg, mod, v string) {
+	t.Helper()
+	modinfo := "path\t" + pkg + "\nmod\t" + mod + "\t" + v + "\th1:VO2moBcbUaVlCLmpQI9c7GT3vJ8JrIpylS+TJq53FMQ=\n" +
+		"dep\tcel.dev/expr\tv0.25.1\th1:1KrZg61W6TWSxuNZ37Xy49ps13NUovb66QLprthtwi4=\n" +
+		"build\t-buildmode=exe\nbuild\tGOOS=linux\n"
+	// The linker puts 16 bytes before and after the module information.
+	modinfo = strings.Repeat("\x00", 16) + modinfo + strings.Repeat("\x00", 16)
+	blob := []byte("\xff Go buildinf:")
+	blob = append(blob, 8, 2) // the pointer size, and the strings inline
+	blob = append(blob, make([]byte, 16)...)
+	for _, s := range []string{"go1.27.3", modinfo} {
+		blob = encbinary.AppendUvarint(blob, uint64(len(s)))
+		blob = append(blob, s...)
+	}
+	header := make([]byte, 32)
+	encbinary.BigEndian.PutUint32(header, plan9obj.Magic386)
+	encbinary.BigEndian.PutUint32(header[8:], uint32(len(blob)))
+	writeFile(t, name, string(header)+string(blob))
 }
 
-func TestParseVersionM(t *testing.T) {
+func TestInspect(t *testing.T) {
+	dir := t.TempDir()
+	task := filepath.Join(dir, "task")
+	writeGoBinary(t, task, taskPkg, "github.com/go-task/task/v3", "v3.41.0")
+	script := filepath.Join(dir, "script")
+	writeFile(t, script, "#!/bin/sh\n")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("the test binary has no build information")
+	}
+
 	tests := []struct {
-		name string
-		out  string
-		want buildInfo
+		name    string
+		bin     string
+		want    buildInfo
+		wantErr error
 	}{
-		{
-			name: "task",
-			out:  versionM("/home/u/go/bin/task", taskPkg, "github.com/go-task/task/v3", "v3.50.0"),
-			want: buildInfo{path: taskPkg, module: "github.com/go-task/task/v3", version: "v3.50.0"},
-		},
-		{
-			name: "package at the module root",
-			out:  versionM("/home/u/go/bin/gofumpt", "mvdan.cc/gofumpt", "mvdan.cc/gofumpt", "v0.9.2"),
-			want: buildInfo{path: "mvdan.cc/gofumpt", module: "mvdan.cc/gofumpt", version: "v0.9.2"},
-		},
-		{
-			name: "pseudo-version",
-			out:  versionM("/home/u/go/bin/goimports", "golang.org/x/tools/cmd/goimports", "golang.org/x/tools", "v0.44.1-0.20261101120000-0123456789ab"),
-			want: buildInfo{path: "golang.org/x/tools/cmd/goimports", module: "golang.org/x/tools", version: "v0.44.1-0.20261101120000-0123456789ab"},
-		},
-		{
-			name: "built from a checkout",
-			out:  "/home/u/go/bin/foo: go1.27.3\n\tpath\texample.com/foo\n\tmod\texample.com/foo\t(devel)\t\n\tbuild\t-buildmode=exe\n",
-			want: buildInfo{path: "example.com/foo", module: "example.com/foo", version: "(devel)"},
-		},
-		{
-			name: "built from files",
-			out:  "/home/u/go/bin/main: go1.27.3\n\tpath\tcommand-line-arguments\n\tbuild\t-buildmode=exe\n",
-			want: buildInfo{path: "command-line-arguments"},
-		},
-		{name: "nothing", out: "", want: buildInfo{}},
-		{name: "windows line endings", out: "C:\\go\\bin\\task.exe: go1.27.3\r\n\tpath\t" + taskPkg + "\r\n\tmod\tgithub.com/go-task/task/v3\tv3.41.0\th1:x=\r\n", want: buildInfo{path: taskPkg, module: "github.com/go-task/task/v3", version: "v3.41.0"}},
+		{name: "go install", bin: task, want: buildInfo{path: taskPkg, version: "v3.41.0"}},
+		{name: "a real Go binary", bin: exe, want: buildInfo{path: self.Path, version: self.Main.Version}},
+		{name: "a script", bin: script, wantErr: errNotGo},
+		{name: "missing", bin: filepath.Join(dir, "missing"), wantErr: fs.ErrNotExist},
 	}
 	for _, tt := range tests {
-		if got := parseVersionM(tt.out); got != tt.want {
-			t.Errorf("%s: parseVersionM() = %+v, want %+v", tt.name, got, tt.want)
+		got, err := inspect(tt.bin)
+		if got != tt.want || !errors.Is(err, tt.wantErr) || (err == nil) != (tt.wantErr == nil) {
+			t.Errorf("%s: inspect() = %+v, %v; want %+v, %v", tt.name, got, err, tt.want, tt.wantErr)
 		}
 	}
 }
@@ -131,8 +134,7 @@ func newFixture(t *testing.T) *fixture {
 // go install puts task.
 func (f *fixture) installed(t *testing.T, pkg, mod, v string) {
 	t.Helper()
-	writeFile(t, f.bin, "\x7fELF")
-	f.runner.On(f.goBin+" version -m "+f.bin, systemtest.Respond(0, versionM(f.bin, pkg, mod, v)))
+	writeGoBinary(t, f.bin, pkg, mod, v)
 }
 
 func (f *fixture) program(version string) *Program {
@@ -218,7 +220,6 @@ func TestCheck(t *testing.T) {
 			setup: func(t *testing.T, f *fixture) {
 				t.Helper()
 				writeFile(t, f.bin, "#!/bin/sh\n")
-				f.runner.On(f.goBin+" version -m "+f.bin, systemtest.Fail(1, ""))
 			},
 			want: resource.Change{Action: resource.Warn, Summary: "task: ~/go/bin/task isn't a Go program (will be replaced)"},
 		},
@@ -232,18 +233,6 @@ func TestCheck(t *testing.T) {
 				f.installed(t, taskPkg, "github.com/go-task/task/v3", "v3.41.0")
 			},
 			want: resource.Change{},
-		},
-		{
-			name:    "the toolchain isn't installed yet",
-			version: "latest",
-			setup: func(t *testing.T, f *fixture) {
-				t.Helper()
-				if err := os.Remove(f.goBin); err != nil {
-					t.Fatal(err)
-				}
-				f.installed(t, taskPkg, "github.com/go-task/task/v3", "v3.41.0")
-			},
-			want: resource.Change{Action: resource.Create, Summary: "task v3.41.0 (latest)"},
 		},
 	}
 	for _, tt := range tests {
@@ -262,6 +251,65 @@ func TestCheck(t *testing.T) {
 				if !slices.Contains(c.Cmd.Env, "GOTOOLCHAIN=local") || !slices.Contains(c.Cmd.Env, "GOFLAGS=-trimpath") {
 					t.Errorf("%s ran with environment %q, want GOTOOLCHAIN=local and the program's own", c.Cmd, c.Cmd.Env)
 				}
+			}
+		})
+	}
+}
+
+// TestCheckWithoutGo checks a program while the go binary doesn't exist
+// yet, as when the same sync upgrades the toolchain to a new version's
+// folder: the program is reinstalled only if its own version changes.
+func TestCheckWithoutGo(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		env     []string          // the program's Env
+		vars    map[string]string // maisys's own environment, which Check doesn't read: only Env, and the Runtime's home folder
+		bin     string            // where the program is, relative to the home folder; "" means ~/go/bin/task
+		at      string            // the version installed; "" means none
+		want    resource.Change
+	}{
+		{name: "up to date", version: "latest", at: "v3.41.0", want: resource.Change{}},
+		{name: "pinned", version: "v3.41.0", at: "v3.41.0", want: resource.Change{}},
+		{name: "older", version: "latest", at: "v3.40.0", want: resource.Change{Action: resource.Update, Summary: "task v3.40.0 → v3.41.0 (latest)"}},
+		{name: "missing", version: "latest", want: resource.Change{Action: resource.Create, Summary: "task v3.41.0 (latest)"}},
+		{name: "GOBIN", version: "latest", env: []string{"GOBIN=~/bin"}, bin: "bin/task", at: "v3.41.0", want: resource.Change{}},
+		{name: "GOPATH", version: "latest", env: []string{"GOPATH=~/gopath" + string(os.PathListSeparator) + "~/other"}, bin: "gopath/bin/task", at: "v3.41.0", want: resource.Change{}},
+		{name: "the last entry wins", version: "latest", env: []string{"GOBIN=~/bin", "GOBIN=", "GOPATH=~/gopath"}, bin: "gopath/bin/task", at: "v3.41.0", want: resource.Change{}},
+		{name: "not maisys's environment", version: "latest", vars: map[string]string{"GOBIN": "~/bin", "GOPATH": "~/gopath"}, at: "v3.41.0", want: resource.Change{}},
+		{name: "somewhere else", version: "latest", bin: "elsewhere/task", at: "v3.41.0", want: resource.Change{Action: resource.Create, Summary: "task v3.41.0 (latest)"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			if err := os.Remove(f.goBin); err != nil {
+				t.Fatal(err)
+			}
+			home := func(s string) string { return strings.ReplaceAll(s, "~", f.home) }
+			if tt.bin != "" {
+				f.bin = filepath.Join(f.home, filepath.FromSlash(tt.bin))
+			}
+			if runtime.GOOS == "windows" {
+				f.bin += ".exe"
+			}
+			if tt.at != "" {
+				f.installed(t, taskPkg, "github.com/go-task/task/v3", tt.at)
+			}
+			for k, v := range tt.vars {
+				t.Setenv(k, home(v))
+			}
+			p := f.program(tt.version)
+			for _, kv := range tt.env {
+				p.Env = append(p.Env, home(kv))
+			}
+
+			got, err := p.Check(t.Context(), f.rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertChange(t, got, tt.want)
+			if got := f.runner.Commands(); len(got) != 0 {
+				t.Errorf("Check() ran %q without go", got)
 			}
 		})
 	}
@@ -438,35 +486,21 @@ func TestRemover(t *testing.T) {
 			setup: func(t *testing.T, f *fixture, _ *state.Record) {
 				t.Helper()
 				writeFile(t, f.bin, "#!/bin/sh\n")
-				f.runner.On(f.goBin+" version -m "+f.bin, systemtest.Fail(1, f.bin+": could not read Go build info from "+f.bin+": not a Go executable\n"))
 			},
 			want: resource.Change{Notes: []string{"~/go/bin/task isn't a Go program any more (left in place)"}},
 			kept: true,
 		},
 		{
 			name: "the toolchain was removed",
-			setup: func(t *testing.T, f *fixture, _ *state.Record) {
+			setup: func(t *testing.T, f *fixture, rec *state.Record) {
 				t.Helper()
 				if err := os.Remove(f.goBin); err != nil {
 					t.Fatal(err)
 				}
-				writeFile(t, f.bin, "\x7fELF")
-				f.runner.On("go version -m "+f.bin, systemtest.Respond(0, versionM(f.bin, taskPkg, "github.com/go-task/task/v3", "v3.41.0")))
+				delete(rec.Details, "go")
+				f.installed(t, taskPkg, "github.com/go-task/task/v3", "v3.41.0")
 			},
 			want: resource.Change{Action: resource.Remove, Summary: "task v3.41.0"},
-		},
-		{
-			name: "no go at all",
-			setup: func(t *testing.T, f *fixture, rec *state.Record) {
-				t.Helper()
-				delete(rec.Details, "go")
-				writeFile(t, f.bin, "\x7fELF")
-				f.runner.On("go", func(_ context.Context, c system.Cmd) (system.Result, error) {
-					return system.Result{ExitCode: -1}, fmt.Errorf("%s: go isn't installed: %w", c.Label, exec.ErrNotFound)
-				})
-			},
-			want: resource.Change{Notes: []string{"~/go/bin/task can't be checked without go (left in place)"}},
-			kept: true,
 		},
 	}
 	for _, tt := range tests {

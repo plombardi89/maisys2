@@ -63,6 +63,13 @@ type Manager struct {
 	// wanted holds the names package sets want, so they're looked up
 	// together.
 	wanted []string
+	// first is the sync's first package, which the plan's note about
+	// apt's lists goes on.
+	first *Package
+	// current holds, by module, the names checks found installed with no
+	// upgrade to make, which are looked up again once apply refreshes
+	// apt's lists (see missedUpgrades).
+	current map[string][]string
 	// sourcesChanged reports whether a package source changed since apt's
 	// lists were last refreshed.
 	sourcesChanged bool
@@ -77,6 +84,9 @@ type Manager struct {
 	// planStale reports whether the plan couldn't refresh apt's stale
 	// lists, so it doesn't try again.
 	planStale bool
+	// relooked holds what looking names up again found since apply last
+	// refreshed apt's lists. It's nil until apply refreshes them.
+	relooked map[string]info
 }
 
 // lookup is what looking a package up found, or why it failed.
@@ -106,6 +116,10 @@ type info struct {
 	// apt's lists are stale or have never been downloaded, and the plan
 	// couldn't refresh them.
 	unchecked bool
+	// providers are the packages the repos have that provide the name, if
+	// they don't have it, as vim-enhanced provides vim. Only dnf looks
+	// them up.
+	providers []string
 }
 
 // upgradeList is the available upgrades, once they're looked up.
@@ -136,6 +150,7 @@ func NewManager(r system.Runner, f *facts.System) (*Manager, error) {
 		lockTimeout: DefaultLockTimeout,
 		lockRetry:   lockRetry,
 		found:       map[string]lookup{},
+		current:     map[string][]string{},
 	}
 	var osName config.OS
 	if f != nil {
@@ -153,14 +168,15 @@ func NewManager(r system.Runner, f *facts.System) (*Manager, error) {
 }
 
 // ManagerFor returns the Manager the resources of rt's sync share, which
-// tells the user what it's waiting for through rt.Log.
+// tells the user what it's waiting for, or what went wrong that it carries
+// on from, in rt.Log and, while the plan is applied, on rt.Out.
 func ManagerFor(rt *resource.Runtime) (*Manager, error) {
 	v, err := rt.Shared(managerKey{}, func() (any, error) {
 		m, err := NewManager(rt.Runner, rt.Facts)
 		if err != nil {
 			return nil, err
 		}
-		m.Notify = rt.Log
+		m.Notify = runtimeNotes{rt}
 		if rt.Now != nil {
 			m.now = rt.Now
 		}
@@ -176,18 +192,37 @@ func ManagerFor(rt *resource.Runtime) (*Manager, error) {
 // managerKey is the key of the shared Manager.
 type managerKey struct{}
 
+// runtimeNotes writes a Manager's messages to the run's log, and to the
+// terminal once it's set, which it is while the plan is applied.
+type runtimeNotes struct {
+	rt *resource.Runtime
+}
+
+func (w runtimeNotes) Write(p []byte) (int, error) {
+	for _, out := range []io.Writer{w.rt.Log, w.rt.Out} {
+		if out != nil {
+			_, _ = out.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
 // String names the package manager, "apt" or "dnf".
 func (m *Manager) String() string {
 	return m.backend.String()
 }
 
-// want notes names a package set wants, so they're looked up together.
-func (m *Manager) want(names ...string) {
+// want notes the packages of a package set, so their names are looked up
+// together.
+func (m *Manager) want(pkgs []*Package) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, name := range names {
-		if !slices.Contains(m.wanted, name) {
-			m.wanted = append(m.wanted, name)
+	for _, p := range pkgs {
+		if m.first == nil {
+			m.first = p
+		}
+		if !slices.Contains(m.wanted, p.name) {
+			m.wanted = append(m.wanted, p.name)
 		}
 	}
 }
@@ -197,6 +232,16 @@ func (m *Manager) wants(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Contains(m.wanted, name)
+}
+
+// isCurrent notes that p's check found it installed, with no upgrade to
+// make.
+func (m *Manager) isCurrent(p *Package) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(m.current[p.module], p.name) {
+		m.current[p.module] = append(m.current[p.module], p.name)
+	}
 }
 
 // checkName checks that name is a package name maisys accepts. apt reads

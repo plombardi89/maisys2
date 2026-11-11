@@ -59,7 +59,8 @@ func (l *statusLines) write(w io.Writer) error {
 
 // showStatus prints the machine, its config repo, the live system, the
 // last sync and how many things maisys manages. It doesn't take the lock,
-// and shows what it can't find out in place of the value, rather than
+// so it never writes the local settings or the state file, even to migrate
+// them, and shows what it can't find out in place of the value, rather than
 // failing.
 func showStatus(cmd *cobra.Command, g *globalOptions) error {
 	paths, err := settings.DefaultPaths(g.goos, g.getenv)
@@ -67,7 +68,7 @@ func showStatus(cmd *cobra.Command, g *globalOptions) error {
 		return err
 	}
 	var lines statusLines
-	saved, err := settings.Load(paths.SettingsFile())
+	saved, err := settings.Read(paths.SettingsFile())
 	switch {
 	case errors.Is(err, settings.ErrNoSettings):
 		lines.add("machine", "not set up yet: run `maisys sync CONFIG-URL` to set up this machine, or `maisys config init` to start a new config repo")
@@ -93,7 +94,7 @@ func showStatus(cmd *cobra.Command, g *globalOptions) error {
 		}
 	}
 
-	if st, err := state.Load(paths.StateFile()); err != nil {
+	if st, err := state.Read(paths.StateFile()); err != nil {
 		lines.add("last sync", "unknown: %v", err)
 	} else {
 		if st.LastSync.IsZero() {

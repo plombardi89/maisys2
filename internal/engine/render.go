@@ -63,6 +63,9 @@ func (p *Plan) Render(w io.Writer, color bool) {
 	for _, m := range p.Modules {
 		r.module(m)
 	}
+	for _, h := range p.HeldBack {
+		r.heldBack(h)
+	}
 	r.removals(p.Removals)
 	if len(r.lines) > 0 {
 		r.flush(p.privilegeTag())
@@ -275,6 +278,16 @@ func (r *planWriter) module(m *ModulePlan) {
 		}
 	}
 	r.heading(start, m.Name)
+}
+
+// heldBack adds the line of a module that's held back, which says how to
+// sync it.
+func (r *planWriter) heldBack(h *HeldBack) {
+	them := "them"
+	if len(h.Needs) == 1 {
+		them = "it"
+	}
+	r.add(0, bold, h.Name, fmt.Sprintf("(skipped because it depends on %s, which --only leaves out: add %s to --only)", list(h.Needs), them), false)
 }
 
 // removals adds the "prune" section, if there's anything to show in it:

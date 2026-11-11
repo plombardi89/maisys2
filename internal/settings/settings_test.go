@@ -408,7 +408,7 @@ func TestMigrate(t *testing.T) {
 			}
 
 			var ran []int
-			got, err := load(path, 3, testSteps(&ran))
+			got, err := load(path, 3, testSteps(&ran), true)
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
@@ -429,7 +429,7 @@ func TestMigrate(t *testing.T) {
 
 			// The migrated file is saved in the new format.
 			ran = nil
-			again, err := load(path, 3, testSteps(&ran))
+			again, err := load(path, 3, testSteps(&ran), true)
 			if err != nil {
 				t.Fatalf("loading the migrated file: %v", err)
 			}
@@ -440,6 +440,58 @@ func TestMigrate(t *testing.T) {
 				t.Error("migrated file doesn't start with the header")
 			}
 		})
+	}
+}
+
+func TestMigrateWithoutSaving(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "maisys.toml")
+	content := "format_version = 1\nrepo = '/x'\nhost = 'box'\n"
+	writeTestFile(t, path, content)
+
+	var ran []int
+	got, err := load(path, 3, testSteps(&ran), false)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if want := (Settings{FormatVersion: 3, RepoDir: "/x", Machine: "box"}); *got != want {
+		t.Errorf("load = %+v, want %+v", *got, want)
+	}
+	if !reflect.DeepEqual(ran, []int{1, 2}) {
+		t.Errorf("migrations run = %v, want [1 2]", ran)
+	}
+	if got := readTestFile(t, path); got != content {
+		t.Errorf("file changed to %q", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("folder holds %v, want only maisys.toml", entries)
+	}
+}
+
+func TestReadWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "maisys.toml")
+	if _, err := Read(path); !errors.Is(err, ErrNoSettings) {
+		t.Errorf("Read of a missing file: error = %v, want ErrNoSettings", err)
+	}
+
+	want := Settings{FormatVersion: FormatVersion, RepoDir: "/x", Machine: "box"}
+	if err := want.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	content := readTestFile(t, path)
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if *got != want {
+		t.Errorf("Read = %+v, want %+v", *got, want)
+	}
+	if got := readTestFile(t, path); got != content {
+		t.Errorf("file changed to %q", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("folder holds %v, want only maisys.toml", entries)
 	}
 }
 
@@ -479,7 +531,7 @@ func TestMigrateErrors(t *testing.T) {
 			path := filepath.Join(dir, "maisys.toml")
 			writeTestFile(t, path, tt.content)
 
-			_, err := load(path, 3, tt.steps)
+			_, err := load(path, 3, tt.steps, true)
 			if want := path + tt.want; err == nil || err.Error() != want {
 				t.Errorf("load error = %v\nwant %s", err, want)
 			}

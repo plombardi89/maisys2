@@ -125,6 +125,17 @@ func TestRenderPlan(t *testing.T) {
 			},
 		},
 		{
+			name: "held-back",
+			setup: func(e *testEnv) {
+				e.only = []string{"golang", "legacy", "files"}
+				e.add("packages", nil, res("package:jq", resource.Create, "install jq").sudo())
+				e.add("golang", []string{"packages"}, res("tool:golang", resource.Create, "toolchain 1.27.4 (latest)"))
+				e.add("kubectl", nil, res("tool:kubectl", resource.Create, "kubectl 1.36.0 (latest)"))
+				e.add("legacy", []string{"golang", "kubectl"}, res("cleanup:~/.ansible", resource.Remove, "~/.ansible"))
+				e.add("files", nil, res("file:~/.gitconfig", resource.Create, "~/.gitconfig"))
+			},
+		},
+		{
 			name: "windows",
 			setup: func(e *testEnv) {
 				e.windows()

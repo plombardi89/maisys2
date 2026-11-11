@@ -57,8 +57,9 @@ type Archive struct {
 // Unpack unpacks the download at src into the folder dir, which must not
 // exist: into a temporary folder next to dir first, which is then renamed
 // to dir, so dir never holds part of an archive. An entry whose path, or
-// link, would leave dir is an error. Files the archive marks executable
-// get mode 0755, other files 0644 and folders 0755 (less the umask).
+// link, would leave dir is an error, even through other links. Files the
+// archive marks executable get mode 0755, other files 0644 and folders
+// 0755 (less the umask).
 func (a Archive) Unpack(src, dir string) (err error) {
 	parent := filepath.Dir(dir)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -94,6 +95,9 @@ func (a Archive) Unpack(src, dir string) (err error) {
 		err = fmt.Errorf("can't unpack a download in format %s", a.Format)
 	}
 	if err != nil {
+		return fmt.Errorf("unpacking %s: %w", filepath.Base(src), err)
+	}
+	if err := x.checkLinks(); err != nil {
 		return fmt.Errorf("unpacking %s: %w", filepath.Base(src), err)
 	}
 	if err := root.Close(); err != nil {
@@ -151,14 +155,19 @@ func (x *extractor) tarGz(src string) error {
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			err = x.root.MkdirAll(rel, 0o755)
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeGNUSparse, tar.TypeCont:
+			// The reader fills in a sparse file's holes, and contiguous
+			// files are regular ones to everything but a few old systems.
 			err = x.write(rel, tr, hdr.FileInfo().Mode())
 		case tar.TypeSymlink:
 			err = x.symlink(rel, hdr.Linkname)
 		case tar.TypeLink:
 			err = x.hardlink(rel, hdr.Linkname)
+		case tar.TypeXGlobalHeader, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			// Global pax headers hold nothing to unpack, and devices and
+			// FIFOs have no place in a tool.
 		default:
-			// Devices, FIFOs and pax headers have no place in a tool.
+			err = fmt.Errorf("is a kind of entry maisys can't unpack (type %q)", hdr.Typeflag)
 		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", hdr.Name, err)
@@ -273,6 +282,23 @@ func (x *extractor) symlink(rel, target string) error {
 		return err
 	}
 	return x.root.Symlink(target, rel)
+}
+
+// checkLinks fails if a symlink in the root leads outside it. One can
+// through others, such as b → a/.. with a → ., though each link's own
+// target stays inside. Links to nothing inside the root are fine.
+func (x *extractor) checkLinks() error {
+	return fs.WalkDir(x.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.Type()&fs.ModeSymlink == 0 {
+			return err
+		}
+		rel := filepath.FromSlash(name)
+		if _, err := x.root.Stat(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			target, _ := x.root.Readlink(rel)
+			return fmt.Errorf("%s: links to %q, which leaves the archive's folder or can't be followed: %w", name, target, err)
+		}
+		return nil
+	})
 }
 
 // hardlink makes a hard link at rel to the entry named name, which the

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Asset is a file to download.
@@ -38,7 +39,9 @@ func (e *ChecksumError) Error() string {
 // first if the cache doesn't have it. sum is the file's sha256, in hex. A
 // download with any other sha256 is deleted and fails with a
 // *ChecksumError, and a cached file that no longer matches is downloaded
-// again, so the file Fetch returns has always just been verified.
+// again, so the file Fetch returns has always just been verified. Before
+// downloading, it deletes the unfinished files earlier downloads of a left
+// behind more than a day ago.
 func (c *Client) Fetch(ctx context.Context, a Asset, sum string) (string, error) {
 	path, sum, err := c.cachePath(a, sum)
 	if err != nil {
@@ -59,6 +62,7 @@ func (c *Client) Fetch(ctx context.Context, a Asset, sum string) (string, error)
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating the download cache: %w", err)
 	}
+	removeStaleParts(path)
 	err = c.retry(ctx, func() error { return c.download(ctx, a, sum, path) })
 	if err != nil {
 		return "", fmt.Errorf("downloading %s: %w", a.Name, err)
@@ -75,7 +79,7 @@ func (c *Client) download(ctx context.Context, a Asset, sum, path string) (err e
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	f, err := os.CreateTemp(c.Dir, "."+filepath.Base(path)+".*.part")
+	f, err := os.CreateTemp(c.Dir, partPrefix(path)+"*"+partSuffix)
 	if err != nil {
 		return err
 	}
@@ -102,6 +106,41 @@ func (c *Client) download(ctx context.Context, a Asset, sum, path string) (err e
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// partSuffix ends the name of the file a download is written to until
+// it's verified, which partPrefix starts.
+const partSuffix = ".part"
+
+// partPrefix returns how the names of the files a download to path is
+// written to start: ".<name>.", followed by a random number and
+// partSuffix.
+func partPrefix(path string) string {
+	return "." + filepath.Base(path) + "."
+}
+
+// partMaxAge is how old a download's .part file must be to count as left
+// behind, as by a maisys killed mid-download: one a download is using is
+// written to all the time, or given up.
+const partMaxAge = 24 * time.Hour
+
+// removeStaleParts deletes the .part files downloads to path left behind
+// more than partMaxAge ago.
+func removeStaleParts(path string) {
+	dir, prefix := filepath.Dir(path), partPrefix(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Name(), prefix)
+		if !ok || !e.Type().IsRegular() || len(rest) <= len(partSuffix) || !strings.HasSuffix(rest, partSuffix) {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > partMaxAge {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // Forget deletes a's file from the download cache, if it's there.

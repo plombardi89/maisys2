@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/plombardi89/maisys2/internal/resource"
@@ -36,12 +37,32 @@ const (
 	DetailName = "unit"
 	// DetailScope is "system" or "user".
 	DetailScope = "scope"
+	// DetailPending is "true" if maisys wrote the unit file while it
+	// couldn't reach systemd, until a sync that can reach it reloads
+	// systemd and restarts the unit, so it runs what the file now says.
+	DetailPending = "pending"
 )
+
+// bootedDir is there while systemd runs the system, as sd_booted(3)
+// checks. Tests replace it.
+var bootedDir = "/run/systemd/system"
 
 // Unit is a systemd unit. Its check reports a unit file to write (with the
 // file package's drift check) and a unit that isn't enabled or running.
+// Two kinds of inactive unit only need enabling: a oneshot service without
+// RemainAfterExit, which is inactive once it's run, unless it failed; and
+// a unit whose last start systemd skipped because a condition in its unit
+// file didn't hold, such as a ConditionPathExists= path that isn't there.
 // Applying writes the file, reloads systemd, and enables and starts the
 // unit; a unit whose file changed is restarted.
+//
+// While maisys can't reach systemd, because it isn't running the system,
+// as in WSL until /etc/wsl.conf's [boot] systemd takes effect, or, for a
+// user unit, because this session can't reach your user manager, as under
+// podman exec, applying only writes the file. The plan says the next sync
+// that can reach systemd enables and starts the unit, and if the file
+// changed, the record says so (DetailPending), so that sync reloads
+// systemd and restarts the unit too.
 type Unit struct {
 	// Name is the unit's name, such as "x410.service".
 	Name string
@@ -100,7 +121,9 @@ func (u *Unit) describe() string {
 // Check compares the unit file, and whether the unit is enabled and
 // running. If both are right but the state file's record of the unit file
 // is missing or out of date, the change has the record applying would
-// leave.
+// leave. It fails if systemctl doesn't print the unit's state, as when it
+// can't reach systemd. While maisys can't reach systemd, it only compares
+// the file, and notes that the unit is enabled and started later.
 func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := u.validate(); err != nil {
 		return resource.Change{}, err
@@ -109,45 +132,74 @@ func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change
 	if err != nil {
 		return resource.Change{}, err
 	}
+	var c resource.Change
 	switch fc.Action {
 	case resource.NoChange:
 	case resource.Create:
-		return resource.Change{Action: resource.Create, Summary: u.describe()}, nil
+		c = resource.Change{Action: resource.Create, Summary: u.describe()}
 	case resource.Update:
-		return resource.Change{Action: resource.Update, Summary: u.describe() + " (update the unit file)"}, nil
+		c = resource.Change{Action: resource.Update, Summary: u.describe() + " (update the unit file)"}
 	default:
-		return fc, nil
+		c = fc
+	}
+	if when := waiting(u.User); when != "" {
+		c.Notes = append(c.Notes, when+" enables and starts "+u.Name)
+		if fc.Record != nil {
+			u.details(fc.Record, u.pending(rt))
+			c.Record = fc.Record
+		}
+		return c, nil
+	}
+	if fc.Action != resource.NoChange {
+		return c, nil
 	}
 
-	enabled, active, err := u.status(ctx, rt.Runner)
+	enabled, started, err := u.status(ctx, rt)
 	if err != nil {
 		return resource.Change{}, err
 	}
 	var todo string
 	switch {
-	case !enabled && !active:
+	case !enabled && !started:
 		todo = "enable and start"
 	case !enabled:
 		todo = "enable"
-	case !active:
+	case !started:
 		todo = "start"
+	case u.pending(rt):
+		todo = "restart with its new unit file"
 	default:
 		if fc.Record != nil {
-			u.details(fc.Record)
+			u.details(fc.Record, false)
 		}
 		return resource.Change{Record: fc.Record}, nil
 	}
 	return resource.Change{Action: resource.Update, Summary: u.describe() + " (" + todo + ")"}, nil
 }
 
-// details adds the unit's name and scope to rec, its file's record.
-func (u *Unit) details(rec *state.Record) {
+// details adds the unit's name and scope to rec, its file's record, and
+// whether systemd is still to be told about the file.
+func (u *Unit) details(rec *state.Record, pending bool) {
 	rec.Details[DetailName] = u.Name
 	rec.Details[DetailScope] = scope(u.User)
+	if pending {
+		rec.Details[DetailPending] = "true"
+	}
+}
+
+// pending reports whether the state file's record says systemd is still
+// to be told about the unit file maisys wrote.
+func (u *Unit) pending(rt *resource.Runtime) bool {
+	if rt.Previous == nil {
+		return false
+	}
+	rec, ok := rt.Previous(u.ID())
+	return ok && rec.Details[DetailPending] == "true"
 }
 
 // Apply writes the unit file if it needs writing, then reloads systemd
 // and enables the unit and restarts it, or else enables and starts it.
+// While maisys can't reach systemd, it only writes the file.
 func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
 	if err := u.validate(); err != nil {
 		return state.Record{}, err
@@ -161,10 +213,15 @@ func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 	if err != nil {
 		return state.Record{}, err
 	}
-	u.details(&rec)
+	reload := fc.Action != resource.NoChange || u.pending(rt)
+	if waiting(u.User) != "" {
+		u.details(&rec, reload)
+		return rec, nil
+	}
+	u.details(&rec, false)
 
 	steps := [][]string{{"enable", "--now", u.Name}}
-	if fc.Action != resource.NoChange {
+	if reload {
 		steps = [][]string{{"daemon-reload"}, {"enable", u.Name}, {"restart", u.Name}}
 	}
 	for _, args := range steps {
@@ -175,6 +232,28 @@ func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 	return rec, nil
 }
 
+// waiting returns why maisys can't reach systemd to manage a unit (a user
+// unit if user is set) and which sync will, such as "systemd isn't
+// running: once it is, the next maisys sync", or "" if it can reach it.
+// systemd doesn't run the system in WSL until /etc/wsl.conf's [boot]
+// systemd takes effect, nor in most containers. systemctl --user reaches
+// your user manager at $XDG_RUNTIME_DIR/systemd/private, which a session
+// without a login, such as podman exec's, doesn't have.
+func waiting(user bool) string {
+	if info, err := os.Stat(bootedDir); err != nil || !info.IsDir() {
+		return "systemd isn't running: once it is, the next maisys sync"
+	}
+	if !user {
+		return ""
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "systemd", "private")); err == nil {
+			return ""
+		}
+	}
+	return "this session can't reach your systemd user manager: the next maisys sync run in a login session"
+}
+
 func (u *Unit) validate() error {
 	if u.Name == "" || strings.ContainsAny(u.Name, `/\`) || !strings.Contains(u.Name, ".") {
 		return fmt.Errorf("%q isn't a systemd unit name, such as \"x410.service\"", u.Name)
@@ -182,27 +261,159 @@ func (u *Unit) validate() error {
 	return nil
 }
 
-// status reports whether the unit is enabled and running.
-func (u *Unit) status(ctx context.Context, r system.Runner) (enabled, active bool, err error) {
-	c := systemctl(u.User, "is-enabled", u.Name)
-	c.AllowExit = []int{1}
-	res, err := r.Run(ctx, c)
+// The states systemctl is-enabled and is-active print, as systemctl
+// --state=help lists them, with "not-found", which is-enabled prints for a
+// unit without a file.
+var (
+	unitFileStates = []string{
+		"enabled", "enabled-runtime", "linked", "linked-runtime", "alias", "masked", "masked-runtime",
+		"static", "disabled", "indirect", "generated", "transient", "bad", "not-found",
+	}
+	activeStates = []string{"active", "reloading", "refreshing", "inactive", "failed", "activating", "deactivating", "maintenance"}
+)
+
+// status reports whether the unit is enabled, and whether it's started:
+// running, or, if it's enabled, inactive because it's a oneshot service
+// (see oneshot) that ran without failing, or because systemd skipped its
+// last start (see skipped).
+func (u *Unit) status(ctx context.Context, rt *resource.Runtime) (enabled, started bool, err error) {
+	state, err := u.state(ctx, rt.Runner, "is-enabled", unitFileStates, "enabled")
 	if err != nil {
 		return false, false, err
 	}
-	switch firstLine(res.Stdout) {
+	switch state {
 	// Static, indirect and generated units are started by something else,
 	// and can't be enabled themselves.
 	case "enabled", "static", "indirect", "generated", "alias":
 		enabled = true
 	}
 
-	c = systemctl(u.User, "is-active", u.Name)
-	c.AllowExit = []int{1, 2, 3, 4}
-	if res, err = r.Run(ctx, c); err != nil {
+	if state, err = u.state(ctx, rt.Runner, "is-active", activeStates, "active"); err != nil {
 		return false, false, err
 	}
-	return enabled, firstLine(res.Stdout) == "active", nil
+	switch state {
+	case "active", "reloading", "refreshing":
+		return enabled, true, nil
+	case "inactive":
+		if !enabled {
+			return false, false, nil
+		}
+		// An enabled oneshot service ran when maisys enabled it, or at boot.
+		content, err := u.Content(rt)
+		if err != nil {
+			return false, false, err
+		}
+		if oneshot(u.Name, content) {
+			return true, true, nil
+		}
+		started, err = u.skipped(ctx, rt)
+		return true, started, err
+	}
+	return enabled, false, nil
+}
+
+// skipped reports whether systemd skipped the unit's last start because a
+// condition in its unit file (Condition...=) didn't hold, which leaves the
+// unit inactive without failing. That's the unit file's choice, not a
+// change for maisys to make: systemd checks the conditions again the next
+// time it starts the unit, such as at the next boot. It says so in the
+// run's log. systemctl show's ConditionResult is "no" both then and before
+// the conditions were ever checked, which ConditionTimestampMonotonic, 0
+// until they are, tells apart.
+func (u *Unit) skipped(ctx context.Context, rt *resource.Runtime) (bool, error) {
+	res, err := rt.Runner.Run(ctx, systemctl(u.User, "show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", u.Name))
+	if err != nil {
+		return false, err
+	}
+	props := map[string]string{}
+	for line := range strings.Lines(string(res.Stdout)) {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			props[key] = value
+		}
+	}
+	if checked := props["ConditionTimestampMonotonic"]; props["ConditionResult"] != "no" || checked == "" || checked == "0" {
+		return false, nil
+	}
+	if rt.Log != nil {
+		status := "systemctl status " + u.Name
+		if u.User {
+			status = "systemctl --user status " + u.Name
+		}
+		_, _ = fmt.Fprintf(rt.Log, "%s: systemd skipped its last start because a condition in its unit file didn't hold, so it's left inactive (%s says which)\n", u.describe(), status)
+	}
+	return true, nil
+}
+
+// oneshot reports whether content is the unit file of a service of Type
+// oneshot without RemainAfterExit, which is inactive again once it's run,
+// as systemd reads it: the last value of a key in [Service] counts, an
+// empty one resets it, and a service without Type or ExecStart is a
+// oneshot.
+func oneshot(name string, content []byte) bool {
+	if !strings.HasSuffix(name, ".service") {
+		return false
+	}
+	settings := serviceSettings(content)
+	typ := settings["Type"]
+	if typ == "" && settings["ExecStart"] == "" {
+		typ = "oneshot"
+	}
+	switch strings.ToLower(settings["RemainAfterExit"]) {
+	case "1", "yes", "y", "true", "t", "on":
+		return false
+	}
+	return typ == "oneshot"
+}
+
+// serviceSettings returns the last value of each key in the [Service]
+// section of the unit file content. Lines starting with # or ; are
+// comments, and a line ending with a backslash goes on in the next one.
+func serviceSettings(content []byte) map[string]string {
+	settings := map[string]string{}
+	var section, continued string
+	for line := range strings.Lines(string(content)) {
+		line = strings.TrimSpace(line)
+		if line == "" && continued == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if start, ok := strings.CutSuffix(line, `\`); ok {
+			continued += start + " "
+			continue
+		}
+		line, continued = continued+line, ""
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = line[1 : len(line)-1]
+			continue
+		}
+		if key, value, ok := strings.Cut(line, "="); ok && section == "Service" {
+			settings[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return settings
+}
+
+// state runs systemctl's verb, is-enabled or is-active, for the unit, and
+// returns the state it prints: one of known, or else, if it exits with 0,
+// ok, the state that means, for a state newer than maisys. Anything else,
+// such as systemctl's error when it can't reach systemd, is an error that
+// says what systemctl printed, so the plan doesn't count on systemctl
+// working when it's applied.
+func (u *Unit) state(ctx context.Context, r system.Runner, verb string, known []string, ok string) (string, error) {
+	c := systemctl(u.User, verb, u.Name)
+	c.AllowExit = []int{1, 2, 3, 4}
+	res, err := r.Run(ctx, c)
+	if err != nil {
+		return "", err
+	}
+	state := firstLine(res.Stdout)
+	switch {
+	case slices.Contains(known, state):
+		return state, nil
+	case res.ExitCode == 0:
+		return ok, nil
+	}
+	c.AllowExit = nil
+	return "", system.CheckExit(c, res)
 }
 
 // firstLine returns the first line of out, trimmed.
@@ -228,14 +439,17 @@ func systemctl(user bool, args ...string) system.Cmd {
 		c.Label = "systemctl --user " + args[0]
 	}
 	// Checks run as you: reading a unit's state doesn't need root.
-	if args[0] == "is-enabled" || args[0] == "is-active" {
+	if args[0] == "is-enabled" || args[0] == "is-active" || args[0] == "show" {
 		c.Root = false
 	}
 	return c
 }
 
 // Remover stops, disables and deletes systemd units once they're taken out
-// of the config, then reloads systemd.
+// of the config, then reloads systemd. While maisys can't reach systemd
+// (see Unit), it leaves a unit, and its record, to the next sync that can:
+// deleting only the file would leave the unit enabled, or running under a
+// user manager this session can't reach, with nothing to stop it later.
 type Remover struct{}
 
 var _ resource.Remover = Remover{}
@@ -243,7 +457,8 @@ var _ resource.Remover = Remover{}
 // Kind returns "systemd-unit".
 func (Remover) Kind() string { return Kind }
 
-// CheckRemove says whether the unit rec records is still there.
+// CheckRemove says whether the unit rec records is still there, and if
+// maisys can't reach systemd to remove it, notes when it's removed.
 func (Remover) CheckRemove(_ context.Context, rt *resource.Runtime, rec state.Record) (resource.Change, error) {
 	name, user, p, err := recorded(rt, rec)
 	if err != nil {
@@ -257,6 +472,9 @@ func (Remover) CheckRemove(_ context.Context, rt *resource.Runtime, rec state.Re
 		return resource.Change{}, fmt.Errorf("reading %s: %w", rec.Paths[0], err)
 	}
 	u := Unit{Name: name, User: user}
+	if when := waiting(user); when != "" {
+		return resource.Change{Action: resource.Orphan, Summary: u.describe(), Notes: []string{when + " stops, disables and deletes " + name}}, nil
+	}
 	return resource.Change{Action: resource.Remove, Summary: u.describe(), Privileged: !user}, nil
 }
 

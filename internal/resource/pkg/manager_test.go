@@ -75,6 +75,51 @@ func TestRunWaitsForTheLock(t *testing.T) {
 	}
 }
 
+// TestNotifyLogAndTerminal checks where the Manager of a sync tells you
+// what it's waiting for, or what went wrong that it carries on from: in
+// the run's log, and on the terminal while the plan is applied, so that
+// waiting for the lock doesn't look like a hang. The plan has no
+// terminal to write to.
+func TestNotifyLogAndTerminal(t *testing.T) {
+	for _, applying := range []bool{false, true} {
+		var log, out strings.Builder
+		runner := systemtest.NewFakeRunner(t)
+		rt := &resource.Runtime{
+			Runner: runner,
+			Facts:  &facts.System{OS: config.Fedora, OSID: "fedora", Arch: config.AMD64, RawArch: "amd64"},
+			Log:    &log,
+			Now:    func() time.Time { return testNow },
+		}
+		m, err := ManagerFor(rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.sleep = func(context.Context, time.Duration) error { return nil }
+		if applying {
+			rt.Out = &out
+		}
+		tries := 0
+		runner.On("dnf install", func(context.Context, system.Cmd) (system.Result, error) {
+			if tries++; tries == 1 {
+				return system.Result{ExitCode: 1, Stderr: []byte(dnfLocked)}, nil
+			}
+			return system.Result{}, nil
+		})
+
+		if err := m.Install(t.Context(), "jq"); err != nil {
+			t.Fatalf("Install() error = %v", err)
+		}
+		want := "maisys: waiting for another program to finish with dnf (Transaction failed: Failed to obtain rpm transaction lock. Another transaction is in progress.)\n"
+		wantOut := ""
+		if applying {
+			wantOut = want
+		}
+		if log.String() != want || out.String() != wantOut {
+			t.Errorf("applying: %t: the log got %q and the terminal %q, want %q and %q", applying, log.String(), out.String(), want, wantOut)
+		}
+	}
+}
+
 func TestRunGivesUpOnTheLock(t *testing.T) {
 	s := fedora(t)
 	s.on("dnf install", result(1, "", dnfLocked))

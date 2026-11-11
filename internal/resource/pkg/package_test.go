@@ -32,6 +32,8 @@ type testSystem struct {
 	now    time.Time
 	slept  time.Duration
 	notes  strings.Builder
+	// held are the packages fakeApt says are held.
+	held []string
 }
 
 func newTestSystem(t *testing.T, os config.OS) *testSystem {
@@ -180,13 +182,21 @@ netcat:
 )
 
 // Realistic outputs of Fedora 44's rpm and dnf, for jq (up to date), tmux
-// (an upgrade), htop (not installed) and jqq (a typo).
+// (an upgrade), htop (not installed), jqq (a typo) and vim (which
+// vim-enhanced provides).
 const (
 	fedoraRPM = "jq\tx86_64\t1.7.1-11.fc44\n" +
 		"tmux\tx86_64\t3.5a-3.fc44\n" +
 		"package htop is not installed\n" +
-		"package jqq is not installed\n"
-	fedoraRepoquery   = "htop\n"
+		"package jqq is not installed\n" +
+		"package vim is not installed\n"
+	fedoraRepoquery    = "htop\n"
+	fedoraWhatProvides = "vim-enhanced\n" +
+		"vim = 2:9.1.1623-1.fc44\n" +
+		"vim(x86-64) = 2:9.1.1623-1.fc44\n" +
+		"vim-enhanced = 2:9.1.1623-1.fc44\n" +
+		"vim-enhanced(x86-64) = 2:9.1.1623-1.fc44\n" +
+		"\n"
 	fedoraCheckUpdate = `
 kernel-core.x86_64                 6.17.4-300.fc44                 updates
 tmux.x86_64                        3.5a-4.fc44                     updates
@@ -256,28 +266,108 @@ func wantResults(t *testing.T, rs []resource.Resource, changes []resource.Change
 
 func TestCheckFedora(t *testing.T) {
 	s := fedora(t)
-	s.on("rpm -q", result(2, fedoraRPM, ""))
+	s.on("rpm -q", result(3, fedoraRPM, ""))
 	s.on("dnf -q repoquery", result(0, fedoraRepoquery, ""))
+	s.on("dnf -q repoquery --whatprovides", result(0, fedoraWhatProvides, ""))
 	s.on("dnf -q check-update", result(100, fedoraCheckUpdate, ""))
 
-	rs := Set(s.rt, "packages", []string{"jq", "tmux", "htop", "jqq"})
+	rs := Set(s.rt, "packages", []string{"jq", "tmux", "htop", "jqq", "vim"})
 	changes, errs := s.check(rs)
 	want := []resource.Change{
 		{},
 		{Action: resource.Update, Summary: "upgrade tmux 3.5a-3.fc44 → 3.5a-4.fc44"},
 		{Action: resource.Create, Summary: "install htop"},
 		{},
+		{},
 	}
-	wantErrs := []string{"", "", "", "unknown package jqq: the enabled repos don't have it"}
+	wantErrs := []string{"", "", "", "unknown package jqq: the enabled repos don't have it", "vim isn't a package name: vim-enhanced provides it, so list that"}
 	wantResults(t, rs, changes, errs, want, wantErrs)
 
 	wantCmds := []string{
-		`rpm -q --qf '%{NAME}\t%{ARCH}\t%|EPOCH?{%{EPOCH}:}:{}|%{VERSION}-%{RELEASE}\n' jq tmux htop jqq`,
-		`dnf -q repoquery --qf '%{name}\n' htop jqq`,
+		`rpm -q --qf '%{NAME}\t%{ARCH}\t%|EPOCH?{%{EPOCH}:}:{}|%{VERSION}-%{RELEASE}\n' jq tmux htop jqq vim`,
+		`dnf -q repoquery --qf '%{name}\n' htop jqq vim`,
+		`dnf -q repoquery --whatprovides jqq,vim --qf '%{name}\n%{provides}\n'`,
 		"dnf -q check-update",
 	}
 	if got := s.commands(); !slices.Equal(got, wantCmds) {
 		t.Errorf("commands =\n%q\nwant\n%q", got, wantCmds)
+	}
+}
+
+// TestCheckFedoraProvides checks names that aren't package names, but that
+// packages provide, such as vim: dnf install accepts them, but rpm -q never
+// finds them installed, so they would be installed on every sync. The
+// error says what to list instead.
+func TestCheckFedoraProvides(t *testing.T) {
+	// provider returns what dnf repoquery --qf '%{name}\n%{provides}\n'
+	// writes about a package that provides each of provides.
+	provider := func(name string, provides ...string) string {
+		out := name + "\n" + name + " = 1.0-1.fc44\n"
+		for _, p := range provides {
+			out += p + " = 1.0-1.fc44\n"
+		}
+		return out + "\n"
+	}
+	tests := []struct {
+		name         string
+		pkg          string
+		whatProvides systemtest.Handler
+		want         string
+	}{
+		{
+			name:         "one package provides it",
+			pkg:          "vim",
+			whatProvides: result(0, fedoraWhatProvides, ""),
+			want:         "vim isn't a package name: vim-enhanced provides it, so list that",
+		},
+		{
+			name: "several packages provide it",
+			pkg:  "java",
+			whatProvides: result(0, provider("java-21-openjdk", "java", "java(x86-64)")+provider("java-21-openjdk", "java", "java(x86-32)")+
+				provider("java-25-openjdk", "java", "java-25")+provider("java-latest-openjdk", "java"), ""),
+			want: "java isn't a package name: java-21-openjdk, java-25-openjdk and java-latest-openjdk provide it, so list one of those",
+		},
+		{
+			name: "many packages provide it",
+			pkg:  "webclient",
+			whatProvides: result(0, provider("elinks", "webclient")+provider("firefox", "webclient")+provider("links", "webclient")+
+				provider("lynx", "webclient")+provider("w3m", "webclient"), ""),
+			want: "webclient isn't a package name: elinks, firefox, links and 2 others provide it, so list one of those",
+		},
+		{
+			name:         "with an architecture",
+			pkg:          "vim.i686",
+			whatProvides: result(0, fedoraWhatProvides, ""),
+			want:         "vim.i686 isn't a package name: vim-enhanced.i686 provides it, so list that",
+		},
+		{
+			name:         "it's only provided with another name",
+			pkg:          "vim",
+			whatProvides: result(0, provider("vim-enhanced", "vim-minimal(x86-64)", "vimx"), ""),
+			want:         "unknown package vim: the enabled repos don't have it",
+		},
+		{
+			name:         "nothing provides it",
+			pkg:          "jqq",
+			whatProvides: result(0, "", ""),
+			want:         "unknown package jqq: the enabled repos don't have it",
+		},
+		{
+			name:         "the lookup fails",
+			pkg:          "vim",
+			whatProvides: result(1, "", "Curl error (6): Couldn't resolve host name\n"),
+			want:         "unknown package vim: the enabled repos don't have it",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := fedora(t)
+			s.fakeDnf(nil, nil, nil)
+			s.on("dnf -q repoquery --whatprovides", tt.whatProvides)
+			rs := Set(s.rt, "packages", []string{tt.pkg})
+			changes, errs := s.check(rs)
+			wantResults(t, rs, changes, errs, []resource.Change{{}}, []string{tt.want})
+		})
 	}
 }
 
@@ -359,7 +449,8 @@ func TestCheckHeld(t *testing.T) {
 
 // TestCheckWithoutLists checks a fresh Ubuntu whose package lists were
 // never downloaded, where sudo needs a password: the plan can't refresh
-// them, so names are checked once they're refreshed, before installing.
+// them, so names are checked once they're refreshed, before installing,
+// and the plan says so.
 func TestCheckWithoutLists(t *testing.T) {
 	s := newTestSystem(t, config.Ubuntu)
 	s.runner.SudoStatus = system.SudoNeedsPassword
@@ -371,7 +462,17 @@ func TestCheckWithoutLists(t *testing.T) {
 	if got := s.runner.RootCommands(); len(got) != 0 {
 		t.Errorf("ran %q as root during the plan, though sudo needs a password", got)
 	}
+	if want := []string{missingListsNote}; !slices.Equal(changes[0].Notes, want) {
+		t.Errorf("notes = %q, want %q", changes[0].Notes, want)
+	}
 }
+
+// The notes the plan shows on the first package when it couldn't refresh
+// apt's lists.
+const (
+	staleListsNote   = "apt's package lists are more than an hour old, and the plan couldn't refresh them (upgrades are checked when they're refreshed during apply)"
+	missingListsNote = "apt's package lists haven't been downloaded, and the plan couldn't download them (packages are checked when they're downloaded during apply)"
+)
 
 // TestCheckStaleLists checks package lists more than an hour old, such as
 // a WSL image's: names they don't have aren't typos until the lists are
@@ -457,6 +558,13 @@ func TestCheckStaleLists(t *testing.T) {
 			fresh := !s.m.listsStale()
 			if fresh != tt.refresh {
 				t.Errorf("lists refreshed during the plan: %t, want %t", fresh, tt.refresh)
+			}
+			var wantNotes []string
+			if !tt.refresh {
+				wantNotes = []string{staleListsNote}
+			}
+			if !slices.Equal(changes[0].Notes, wantNotes) {
+				t.Errorf("plan notes = %q, want %q", changes[0].Notes, wantNotes)
 			}
 		})
 	}
