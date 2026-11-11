@@ -176,8 +176,8 @@ type Removal struct {
 // the plan shows. If an enabled module can't list its resources, the plan
 // removes nothing, and warns why. NewPlan returns an
 // error if the modules can't be ordered, if two resources have the same
-// ID, if in.Only names a module that doesn't exist, or if a change needs
-// sudo and sudo is missing or the user may not use it.
+// ID or the same target, if in.Only names a module that doesn't exist, or
+// if a change needs sudo and sudo is missing or the user may not use it.
 func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 	if in.Machine == nil {
 		return nil, errors.New("planning needs the machine's config")
@@ -235,8 +235,10 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 	// record whose ID owner has is never removed, whichever module it
 	// names: a resource can move to another module, and its record may
 	// still name the old one. If a module can't list its resources, any of
-	// them might have a record, so nothing is removed.
+	// them might have a record, so nothing is removed. No two resources
+	// may write the same path, which claims maps to the one that does.
 	owner := map[string]string{}
+	claims := map[string]claim{}
 	listed := map[string][]resource.Resource{}
 	unlisted := map[string]error{}
 	for _, mod := range enabled(in, func(string) bool { return true }) {
@@ -248,6 +250,9 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 			continue
 		}
 		if err := own(owner, name, resources); err != nil {
+			return nil, err
+		}
+		if err := claimTargets(claims, name, resources, in.Paths.Home, in.Machine.OS == config.Windows); err != nil {
 			return nil, err
 		}
 		listed[name] = resources

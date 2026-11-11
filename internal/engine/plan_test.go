@@ -175,6 +175,130 @@ func TestPlanDuplicateIDs(t *testing.T) {
 	}
 }
 
+func TestPlanOwnership(t *testing.T) {
+	// writes returns a fake resource with id that writes targets.
+	writes := func(id string, targets ...string) *fakeResource {
+		r := res(id, resource.Create, "")
+		r.targets = targets
+		return r
+	}
+	tests := []struct {
+		name  string
+		setup func(e *testEnv)
+		want  string // "" if there's no error
+	}{
+		{
+			name: "two modules",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:~/.zshrc", "~/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+			},
+			want: "modules files and shell both write ~/.zshrc (file:~/.zshrc and shell-rc:zsh)",
+		},
+		{
+			name: "one module",
+			setup: func(e *testEnv) {
+				e.add("golang", nil,
+					writes("tool:golang", "~/.local/share/maisys/tools/go", "~/.local/bin/go", "~/.local/bin/gofmt"),
+					writes("symlink:~/.local/bin/go", "~/.local/bin/go"),
+				)
+			},
+			want: "module golang has two resources that write ~/.local/bin/go (tool:golang and symlink:~/.local/bin/go)",
+		},
+		{
+			name: "the home folder written out",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:~/.zshrc", "/home/phil/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+			},
+			want: "modules files and shell both write ~/.zshrc (file:~/.zshrc and shell-rc:zsh)",
+		},
+		{
+			name: "paths that aren't clean",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:a", "~/.config/nvim/init.lua"))
+				e.add("nvim", nil, writes("file:b", "~/.config//nvim/./lua/../init.lua"))
+			},
+			want: "modules files and nvim both write ~/.config//nvim/./lua/../init.lua (file:a and file:b)",
+		},
+		{
+			name: "outside the home folder",
+			setup: func(e *testEnv) {
+				e.add("sudo", nil, writes("sudoers:phil", "/etc/sudoers.d/phil"))
+				e.add("files", nil, writes("file:sudoers", "/etc/sudoers.d/phil/"))
+			},
+			want: "modules sudo and files both write /etc/sudoers.d/phil/ (sudoers:phil and file:sudoers)",
+		},
+		{
+			name: "Windows paths ignore case",
+			setup: func(e *testEnv) {
+				e.windows()
+				e.add("wsl_host", nil, writes("file:~/.wslconfig", `~\.wslconfig`))
+				e.add("files", nil, writes("file:wslconfig", `C:\Users\Phil\.WSLConfig`))
+			},
+			want: `modules wsl_host and files both write C:\Users\Phil\.WSLConfig (file:~/.wslconfig and file:wslconfig)`,
+		},
+		{
+			name: "Linux paths don't",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:a", "~/.zshrc"))
+				e.add("shell", nil, writes("file:b", "~/.ZSHRC"))
+			},
+		},
+		{
+			name: "inside a folder another resource writes",
+			setup: func(e *testEnv) {
+				e.add("shell", nil,
+					writes("git-checkout:omz", "~/.oh-my-zsh"),
+					writes("symlink:theme", "~/.oh-my-zsh/custom/themes/theme.zsh-theme"),
+				)
+				e.add("files", nil, writes("file:plugin", "~/.oh-my-zsh/custom/plugins/plugin.zsh"))
+			},
+		},
+		{
+			name: "the same path twice in one resource",
+			setup: func(e *testEnv) {
+				e.add("golang", nil, writes("tool:golang", "~/.local/bin/go", "/home/phil/.local/bin/go"))
+			},
+		},
+		{
+			name: "a module left out by only",
+			setup: func(e *testEnv) {
+				e.only = []string{"files"}
+				e.add("files", nil, writes("file:~/.zshrc", "~/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+			},
+			want: "modules files and shell both write ~/.zshrc (file:~/.zshrc and shell-rc:zsh)",
+		},
+		{
+			name: "a module that's turned off",
+			setup: func(e *testEnv) {
+				e.add("files", nil, writes("file:~/.zshrc", "~/.zshrc"))
+				e.add("shell", nil, writes("shell-rc:zsh", "~/.zshrc"))
+				e.disable("shell")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			tt.setup(e)
+			in := e.input()
+			in.Paths.Home = "/home/phil"
+			if e.machine.OS == config.Windows {
+				in.Paths.Home = `C:\Users\phil`
+			}
+			_, err := NewPlan(t.Context(), in)
+			switch {
+			case tt.want == "" && err != nil:
+				t.Errorf("NewPlan() error = %v, want none", err)
+			case tt.want != "" && (err == nil || err.Error() != tt.want):
+				t.Errorf("NewPlan() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlanDependencyOrder(t *testing.T) {
 	type mod struct {
 		name     string

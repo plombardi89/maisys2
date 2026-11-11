@@ -578,7 +578,6 @@ func TestApplyRechecksInsideApplied(t *testing.T) {
 		nested("symlink:theme", "~/.oh-my-zsh/custom/themes/theme.zsh-theme", &replaced, resource.Create, &inside),
 		stale,
 		nested("file:sibling", filepath.Join(home, ".oh-my-zsh-sibling"), &replaced, resource.Create, &outside),
-		nested("file:same", "~/.oh-my-zsh/", &replaced, resource.Create, &outside),
 	)
 	e.add("later", nil, nested("git-checkout:later", "~/.oh-my-zsh/custom/plugins/later", &replaced, resource.Update, &inside))
 	e.add("other", nil, nested("file:other", "~/.zshrc", &replaced, resource.Update, &outside))
@@ -605,7 +604,7 @@ func TestApplyRechecksInsideApplied(t *testing.T) {
 	if n := inside.Load(); n != 8 {
 		t.Errorf("the resources inside ~/.oh-my-zsh were checked %d times, want twice each", n)
 	}
-	if n := outside.Load(); n != 3 {
+	if n := outside.Load(); n != 2 {
 		t.Errorf("the resources outside ~/.oh-my-zsh were checked %d times, want once each", n)
 	}
 	if got, want := e.steps.get(), []string{"apply git-checkout:omz", "apply git-checkout:plugin", "apply symlink:theme", "apply git-checkout:stale", "apply git-checkout:later"}; !slices.Equal(got, want) {
