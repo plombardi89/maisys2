@@ -625,14 +625,95 @@ func TestRemover(t *testing.T) {
 	if err := r.Remove(t.Context(), sb.rt, rec); err != nil {
 		t.Errorf("Remove() of a checkout that's gone: error = %v", err)
 	}
+}
 
-	// Something that isn't a checkout any more is left in place.
-	writeFile(t, filepath.Join(c.Dir, "mine.zsh"), "mine")
-	checkRemove(resource.Change{Action: resource.Warn, Summary: shown + " isn't a git checkout any more (left in place)"})
-	if err := r.Remove(t.Context(), sb.rt, rec); err != nil {
-		t.Fatal(err)
+// TestRemoverLeavesInPlace checks that what's no longer a checkout of the
+// repo maisys cloned is left in place when the checkout is taken out of
+// the config.
+func TestRemoverLeavesInPlace(t *testing.T) {
+	shown := "~/.oh-my-zsh/custom/plugins/plugin"
+	// In the tests' summaries, UP is the repo's URL.
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, sb *sandbox, dir string)
+		want  resource.Change
+		kept  string // a file in dir that holds "mine", or "" if dir is the file
+	}{
+		{
+			name: "not a checkout",
+			setup: func(t *testing.T, _ *sandbox, dir string) {
+				t.Helper()
+				writeFile(t, filepath.Join(dir, "mine.zsh"), "mine")
+			},
+			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a git checkout any more (left in place)"},
+			kept: "mine.zsh",
+		},
+		{
+			name: "a file",
+			setup: func(t *testing.T, _ *sandbox, dir string) {
+				t.Helper()
+				writeFile(t, dir, "mine")
+			},
+			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a directory any more (left in place)"},
+		},
+		{
+			name: "a broken checkout",
+			setup: func(t *testing.T, _ *sandbox, dir string) {
+				t.Helper()
+				writeFile(t, filepath.Join(dir, ".git"), "gitdir: /nowhere\n")
+				writeFile(t, filepath.Join(dir, "mine.zsh"), "mine")
+			},
+			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a git checkout any more (left in place)"},
+			kept: "mine.zsh",
+		},
+		{
+			name: "a checkout of another repo",
+			setup: func(_ *testing.T, sb *sandbox, dir string) {
+				other := sb.upstream("other")
+				other.commit("mine.zsh", "mine")
+				sb.git("", "clone", "--quiet", other.url, dir)
+			},
+			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a checkout of UP any more (left in place)"},
+			kept: "mine.zsh",
+		},
+		{
+			name: "a checkout without an origin",
+			setup: func(t *testing.T, sb *sandbox, dir string) {
+				t.Helper()
+				sb.git("", "init", "--quiet", dir)
+				writeFile(t, filepath.Join(dir, "mine.zsh"), "mine")
+			},
+			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a checkout of UP any more (left in place)"},
+			kept: "mine.zsh",
+		},
 	}
-	assertContent(t, filepath.Join(c.Dir, "mine.zsh"), "mine")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			up := sb.upstream("plugin")
+			up.commit("plugin.zsh", "one")
+			c := sb.checkout("plugin", up.url, "main")
+			sb.check(c)
+			rec := sb.apply(c)
+			if err := os.RemoveAll(c.Dir); err != nil {
+				t.Fatal(err)
+			}
+			tt.setup(t, sb, c.Dir)
+
+			r := Remover{Env: sb.env}
+			got, err := r.CheckRemove(t.Context(), sb.rt, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tt.want
+			want.Summary = strings.ReplaceAll(want.Summary, "UP", up.url)
+			assertChange(t, got, want)
+			if err := r.Remove(t.Context(), sb.rt, rec); err != nil {
+				t.Fatal(err)
+			}
+			assertContent(t, filepath.Join(c.Dir, tt.kept), "mine")
+		})
+	}
 }
 
 func TestSameRepo(t *testing.T) {
