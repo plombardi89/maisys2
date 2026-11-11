@@ -85,7 +85,8 @@ func (p *Package) Group() string { return Group }
 
 // Check finds whether the package needs installing or upgrading. A name
 // the enabled repos don't have is an error, unless the package may come
-// from something the same sync adds. A package held at its version
+// from something the same sync adds; on Fedora, if the repos have packages
+// that provide it, the error names them. A package held at its version
 // (apt-mark hold) isn't upgraded: the plan notes that it's held. If apt's
 // lists are stale and the plan couldn't refresh them, the sync's first
 // package notes that.
@@ -126,9 +127,26 @@ func (p *Package) change(ctx context.Context, rt *resource.Runtime, in info) (re
 		return resource.Change{Action: resource.Create, Summary: "install " + p.name}, nil
 	case in.noCandidate:
 		return resource.Change{}, fmt.Errorf("unknown package %s: the enabled repos have nothing to install for it (is it a virtual package? List the package that provides it instead)", p.name)
+	case len(in.providers) > 0:
+		return resource.Change{}, providedError(p.name, in.providers)
 	default:
 		return resource.Change{}, fmt.Errorf("unknown package %s: the enabled repos don't have it", p.name)
 	}
+}
+
+// providedError is the error for name, which isn't a package name, but
+// which providers provide, such as vim, which vim-enhanced provides. It
+// names the first few.
+func providedError(name string, providers []string) error {
+	const shown = 3
+	if len(providers) == 1 {
+		return fmt.Errorf("%s isn't a package name: %s provides it, so list that", name, providers[0])
+	}
+	list := strings.Join(providers[:len(providers)-1], ", ") + " and " + providers[len(providers)-1]
+	if len(providers) > shown {
+		list = fmt.Sprintf("%s and %d others", strings.Join(providers[:shown], ", "), len(providers)-shown)
+	}
+	return fmt.Errorf("%s isn't a package name: %s provide it, so list one of those", name, list)
 }
 
 // fromPending reports whether something the package may come from has a

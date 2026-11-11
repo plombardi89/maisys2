@@ -116,6 +116,10 @@ type info struct {
 	// apt's lists are stale or have never been downloaded, and the plan
 	// couldn't refresh them.
 	unchecked bool
+	// providers are the packages the repos have that provide the name, if
+	// they don't have it, as vim-enhanced provides vim. Only dnf looks
+	// them up.
+	providers []string
 }
 
 // upgradeList is the available upgrades, once they're looked up.

@@ -22,8 +22,8 @@ const rpmFormat = `%{NAME}\t%{ARCH}\t%|EPOCH?{%{EPOCH}:}:{}|%{VERSION}-%{RELEASE
 var rpmArches = []string{"x86_64", "aarch64", "i686", "i386", "noarch"}
 
 // query looks names up with rpm -q, for what's installed; dnf repoquery,
-// for whether the repos have the rest; and dnf check-update, for the
-// upgrades the repos have.
+// for whether the repos have the rest, and what provides those they don't
+// have; and dnf check-update, for the upgrades the repos have.
 func (dnf) query(ctx context.Context, m *Manager, names []string) (map[string]info, error) {
 	// rpm -q's exit code is how many names aren't installed.
 	notFound := make([]int, 0, min(len(names), 255))
@@ -63,11 +63,23 @@ func (dnf) query(ctx context.Context, m *Manager, names []string) (map[string]in
 		}
 		// dnf 4 doesn't turn \n into a new line.
 		have := strings.Fields(strings.ReplaceAll(string(res.Stdout), `\n`, "\n"))
+		var unknown []string
 		for _, name := range missing {
 			base, _ := splitRPMArch(name)
 			in := infos[name]
 			in.known = slices.Contains(have, base)
 			infos[name] = in
+			if !in.known {
+				unknown = append(unknown, name)
+			}
+		}
+		if len(unknown) > 0 {
+			providers := whatProvides(ctx, m, unknown)
+			for _, name := range unknown {
+				in := infos[name]
+				in.providers = providers[name]
+				infos[name] = in
+			}
 		}
 	}
 
@@ -104,6 +116,57 @@ func (m *Manager) upgradeList(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return m.upgrades.versions, m.upgrades.err
+}
+
+// whatProvides returns, for each of names that the enabled repos don't
+// have as a package, the packages they have that provide it, with names'
+// architecture if it has one: dnf install accepts such a name, but rpm -q
+// never finds it installed, so it would be installed on every sync. It
+// looks them all up with one dnf repoquery, printing each provider's name
+// and then its provides, a line each, with a blank line after them. If
+// that fails, it returns nothing: the providers only make an error
+// clearer.
+func whatProvides(ctx context.Context, m *Manager, names []string) map[string][]string {
+	var bases []string
+	for _, name := range names {
+		if base, _ := splitRPMArch(name); !slices.Contains(bases, base) {
+			bases = append(bases, base)
+		}
+	}
+	res, err := m.runner.Run(ctx, system.Cmd{
+		Name:  "dnf",
+		Args:  []string{"-q", "repoquery", "--whatprovides", strings.Join(bases, ","), "--qf", `%{name}\n%{provides}\n`},
+		Label: "dnf repoquery --whatprovides",
+	})
+	if err != nil {
+		return nil
+	}
+	byBase := map[string][]string{}
+	out := strings.ReplaceAll(string(res.Stdout), `\n`, "\n")
+	for block := range strings.SplitSeq(out, "\n\n") {
+		lines := strings.Split(strings.TrimSpace(block), "\n")
+		provider := strings.TrimSpace(lines[0])
+		if provider == "" {
+			continue
+		}
+		for _, line := range lines[1:] {
+			f := strings.Fields(line)
+			if len(f) > 0 && slices.Contains(bases, f[0]) && !slices.Contains(byBase[f[0]], provider) {
+				byBase[f[0]] = append(byBase[f[0]], provider)
+			}
+		}
+	}
+	providers := map[string][]string{}
+	for _, name := range names {
+		base, arch := splitRPMArch(name)
+		for _, p := range byBase[base] {
+			if arch != "" {
+				p += "." + arch
+			}
+			providers[name] = append(providers[name], p)
+		}
+	}
+	return providers
 }
 
 // install installs packages with dnf install, and upgrades others with dnf

@@ -54,7 +54,7 @@ func (s *testSystem) fakeApt(installed, candidates map[string]string) {
 // fakeDnf answers rpm -q, dnf repoquery and dnf check-update: installed
 // maps the packages installed to their versions, available lists the
 // packages the repos have, and upgrades maps packages to the versions
-// they'd be upgraded to.
+// they'd be upgraded to. Nothing provides the names the repos don't have.
 func (s *testSystem) fakeDnf(installed map[string]string, available []string, upgrades map[string]string) {
 	s.on("rpm -q", func(_ context.Context, c system.Cmd) (system.Result, error) {
 		var out strings.Builder
@@ -78,6 +78,7 @@ func (s *testSystem) fakeDnf(installed map[string]string, available []string, up
 		}
 		return system.Result{Stdout: []byte(out.String())}, nil
 	})
+	s.on("dnf -q repoquery --whatprovides", result(0, "", ""))
 	s.on("dnf -q check-update", func(context.Context, system.Cmd) (system.Result, error) {
 		var out strings.Builder
 		for name, v := range upgrades {
