@@ -328,7 +328,9 @@ func isMajorVersion(elem string) bool {
 }
 
 // Remover deletes the programs taken out of the config, if the binary is
-// still the program maisys installed.
+// still the program maisys installed. Anything else is left in place, with
+// only a note in the plan, since nothing changes; its record is dropped, so
+// maisys stops managing it.
 type Remover struct{}
 
 var _ resource.Remover = Remover{}
@@ -344,7 +346,7 @@ func (r Remover) CheckRemove(ctx context.Context, rt *resource.Runtime, rec stat
 	case err != nil || bin == "":
 		return resource.Change{}, err
 	case why != "":
-		return resource.Change{Action: resource.Warn, Summary: fmt.Sprintf("%s %s (left in place)", tilde(rt.Paths.Home, bin), why)}, nil
+		return resource.Change{Notes: []string{fmt.Sprintf("%s %s (left in place)", tilde(rt.Paths.Home, bin), why)}}, nil
 	}
 	return resource.Change{Action: resource.Remove, Summary: execName(info.path) + " " + info.version}, nil
 }

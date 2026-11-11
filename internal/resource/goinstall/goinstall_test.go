@@ -407,10 +407,10 @@ func TestRemover(t *testing.T) {
 		t.Errorf("Kind() = %q, want %q", r.Kind(), Kind)
 	}
 	tests := []struct {
-		name    string
-		setup   func(t *testing.T, f *fixture, rec *state.Record)
-		want    resource.Change
-		removed bool
+		name  string
+		setup func(t *testing.T, f *fixture, rec *state.Record)
+		want  resource.Change
+		kept  bool // whether the binary is still there after Remove
 	}{
 		{
 			name: "installed",
@@ -418,8 +418,7 @@ func TestRemover(t *testing.T) {
 				t.Helper()
 				f.installed(t, taskPkg, "github.com/go-task/task/v3", "v3.41.0")
 			},
-			want:    resource.Change{Action: resource.Remove, Summary: "task v3.41.0"},
-			removed: true,
+			want: resource.Change{Action: resource.Remove, Summary: "task v3.41.0"},
 		},
 		{
 			name: "gone",
@@ -431,7 +430,8 @@ func TestRemover(t *testing.T) {
 				t.Helper()
 				f.installed(t, "example.com/task", "example.com/task", "v1.0.0")
 			},
-			want: resource.Change{Action: resource.Warn, Summary: "~/go/bin/task is example.com/task now (left in place)"},
+			want: resource.Change{Notes: []string{"~/go/bin/task is example.com/task now (left in place)"}},
+			kept: true,
 		},
 		{
 			name: "not a Go program",
@@ -440,7 +440,8 @@ func TestRemover(t *testing.T) {
 				writeFile(t, f.bin, "#!/bin/sh\n")
 				f.runner.On(f.goBin+" version -m "+f.bin, systemtest.Fail(1, f.bin+": could not read Go build info from "+f.bin+": not a Go executable\n"))
 			},
-			want: resource.Change{Action: resource.Warn, Summary: "~/go/bin/task isn't a Go program any more (left in place)"},
+			want: resource.Change{Notes: []string{"~/go/bin/task isn't a Go program any more (left in place)"}},
+			kept: true,
 		},
 		{
 			name: "the toolchain was removed",
@@ -452,8 +453,7 @@ func TestRemover(t *testing.T) {
 				writeFile(t, f.bin, "\x7fELF")
 				f.runner.On("go version -m "+f.bin, systemtest.Respond(0, versionM(f.bin, taskPkg, "github.com/go-task/task/v3", "v3.41.0")))
 			},
-			want:    resource.Change{Action: resource.Remove, Summary: "task v3.41.0"},
-			removed: true,
+			want: resource.Change{Action: resource.Remove, Summary: "task v3.41.0"},
 		},
 		{
 			name: "no go at all",
@@ -465,7 +465,8 @@ func TestRemover(t *testing.T) {
 					return system.Result{ExitCode: -1}, fmt.Errorf("%s: go isn't installed: %w", c.Label, exec.ErrNotFound)
 				})
 			},
-			want: resource.Change{Action: resource.Warn, Summary: "~/go/bin/task can't be checked without go (left in place)"},
+			want: resource.Change{Notes: []string{"~/go/bin/task can't be checked without go (left in place)"}},
+			kept: true,
 		},
 	}
 	for _, tt := range tests {
@@ -489,8 +490,8 @@ func TestRemover(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = os.Lstat(f.bin)
-			if removed := errors.Is(err, os.ErrNotExist); removed != (tt.removed || tt.want.Action == resource.NoChange) {
-				t.Errorf("after Remove(), %s exists: %t", f.bin, !removed)
+			if kept := !errors.Is(err, os.ErrNotExist); kept != tt.kept {
+				t.Errorf("after Remove(), %s exists: %t, want %t", f.bin, kept, tt.kept)
 			}
 		})
 	}
