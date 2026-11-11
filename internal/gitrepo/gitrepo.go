@@ -69,7 +69,9 @@ type Repo struct {
 // Clone clones url into dir. Over HTTPS, it signs in with opts.Auth.Token if
 // it's set. Otherwise, if git can't sign in by itself and no credential
 // helper is set up, it asks opts.Auth.Prompt for a token, saves it in
-// opts.Auth.CredentialsFile and sets up the clone to use it.
+// opts.Auth.CredentialsFile and sets up the clone to use it. Whether it's
+// over HTTPS depends on the URL git connects to, after any
+// url.<base>.insteadOf setting has rewritten url.
 func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
@@ -78,8 +80,12 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 	r := &Repo{Dir: dir, Options: opts}
 	shown := Redact(url)
 	args := append(append([]string{"clone"}, opts.progressFlag()...), "--", url, dir)
+	via, err := opts.cloneURL(ctx, url)
+	if err != nil {
+		return nil, err
+	}
 
-	if isHTTPS(url) && opts.Auth.Token != "" {
+	if isHTTPS(via) && opts.Auth.Token != "" {
 		c, err := opts.Auth.tokenCall(call{dir: outsideRepos(), args: args, progress: true})
 		if err != nil {
 			return nil, err
@@ -100,10 +106,10 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 	if !ok || !authFailed(ge.stderr) {
 		return nil, cloneError(shown, err, nil)
 	}
-	if !isHTTPS(url) {
-		return nil, otherAuthError(url, ge)
+	if !isHTTPS(via) {
+		return nil, otherAuthError(via, ge)
 	}
-	helper, err := opts.userConfig(ctx, "--get-urlmatch", "credential.helper", url)
+	helper, err := opts.userConfig(ctx, "--get-urlmatch", "credential.helper", via)
 	if err != nil {
 		return nil, err
 	}
@@ -114,11 +120,11 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 	if opts.Auth.Prompt == nil || opts.Auth.CredentialsFile == "" {
 		return nil, fmt.Errorf("%w to %s (%s).\nTo sign in, do one of these:\n%s", ErrAuth, shown, ge.message(), signInOptions(true))
 	}
-	return r.cloneWithPrompt(ctx, url, args)
+	return r.cloneWithPrompt(ctx, via, args)
 }
 
-// cloneWithPrompt asks for a token, saves it and clones with it, then sets up
-// the clone to keep using it.
+// cloneWithPrompt asks for a token for url, the URL git connects to,
+// saves it and clones with it, then sets up the clone to keep using it.
 func (r *Repo) cloneWithPrompt(ctx context.Context, url string, args []string) (*Repo, error) {
 	shown := Redact(url)
 	file := r.Auth.CredentialsFile
@@ -211,14 +217,44 @@ func Init(ctx context.Context, dir string, opts Options) (*Repo, error) {
 	return r, nil
 }
 
-// RemoteURL returns the URL of the clone's origin, or "" if it has none.
+// RemoteURL returns the URL of the clone's origin as its config sets it, or
+// "" if it has none. git may connect to another URL: a url.<base>.insteadOf
+// setting can rewrite it.
 func (r *Repo) RemoteURL(ctx context.Context) (string, error) {
-	out, err := r.run(ctx, call{dir: r.Dir, args: []string{"remote", "get-url", "origin"}})
+	out, err := r.run(ctx, call{dir: r.Dir, args: []string{"config", "--get-all", "remote.origin.url"}})
 	if err != nil {
-		if ge, ok := errors.AsType[*gitError](err); ok && ge.code == 2 && strings.Contains(ge.stderr, "No such remote") {
+		if ge, ok := errors.AsType[*gitError](err); ok && ge.code == 1 {
 			return "", nil
 		}
 		return "", fmt.Errorf("couldn't read the remote of %s: %w", r.Dir, err)
+	}
+	// git fetches from the first, if there are several.
+	first, _, _ := strings.Cut(out, "\n")
+	return strings.TrimSpace(first), nil
+}
+
+// connectURL returns the URL git connects to for origin: to fetch from, or
+// with push, to push to. Unlike RemoteURL's, it has url.<base>.insteadOf
+// and pushInsteadOf settings, and remote.origin.pushurl, applied, so it
+// says how git signs in.
+func (r *Repo) connectURL(ctx context.Context, push bool) (string, error) {
+	args := []string{"remote", "get-url", "origin"}
+	if push {
+		args = []string{"remote", "get-url", "--push", "origin"}
+	}
+	out, err := r.run(ctx, call{dir: r.Dir, args: args})
+	if err != nil {
+		return "", fmt.Errorf("couldn't read the remote of %s: %w", r.Dir, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// cloneURL returns the URL git connects to when it clones url: url, with
+// any url.<base>.insteadOf setting applied.
+func (o *Options) cloneURL(ctx context.Context, url string) (string, error) {
+	out, err := o.run(ctx, call{dir: outsideRepos(), args: []string{"ls-remote", "--get-url", "--", url}})
+	if err != nil {
+		return "", fmt.Errorf("couldn't read git's settings: %w", err)
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -254,12 +290,16 @@ func (r *Repo) Head(ctx context.Context) (string, error) {
 // typed at the prompt was saved for the clone, and it's rejected, Pull asks
 // r.Auth.Prompt for a new one, saves it in its place and tries again.
 func (r *Repo) Pull(ctx context.Context) error {
-	url, err := r.RemoteURL(ctx)
+	remote, err := r.RemoteURL(ctx)
 	if err != nil {
 		return err
 	}
-	if url == "" {
+	if remote == "" {
 		return fmt.Errorf("the config repo in %s has no remote to pull from", r.Dir)
+	}
+	url, err := r.connectURL(ctx, false)
+	if err != nil {
+		return err
 	}
 
 	c := call{dir: r.Dir, args: append([]string{"pull", "--ff-only"}, r.progressFlag()...), progress: true}
@@ -381,12 +421,16 @@ func (r *Repo) SetRemote(ctx context.Context, url string) error {
 // Push pushes the current branch to origin and makes it the branch's
 // upstream. Over HTTPS, it signs in with r.Auth.Token if it's set.
 func (r *Repo) Push(ctx context.Context) error {
-	url, err := r.RemoteURL(ctx)
+	remote, err := r.RemoteURL(ctx)
 	if err != nil {
 		return err
 	}
-	if url == "" {
+	if remote == "" {
 		return fmt.Errorf("the repo in %s has no remote to push to", r.Dir)
+	}
+	url, err := r.connectURL(ctx, true)
+	if err != nil {
+		return err
 	}
 
 	c := call{dir: r.Dir, args: append(append([]string{"push"}, r.progressFlag()...), "--set-upstream", "origin", "HEAD"), progress: true}

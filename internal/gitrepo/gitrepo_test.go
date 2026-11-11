@@ -314,6 +314,66 @@ func TestPullAsksForNewToken(t *testing.T) {
 	}
 }
 
+// TestSignInThroughInsteadOf checks that whether maisys signs in to the
+// config repo with a token depends on the URL git connects to, which a
+// url.<base>.insteadOf setting can make an HTTPS URL when the remote's
+// isn't one.
+func TestSignInThroughInsteadOf(t *testing.T) {
+	tests := []struct {
+		name  string
+		token bool // MAISYS_CONFIG_TOKEN, rather than a token typed at the prompt
+	}{
+		{"MAISYS_CONFIG_TOKEN", true},
+		{"a token typed at the prompt", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			srv := newGitServer(t, sb)
+			upstream := filepath.Join(srv.root, "config.git")
+			sb.git(upstream, "config", "http.receivepack", "true")
+			sb.setGlobal("url."+srv.privateURL("")+".insteadOf", "config-host:")
+			const url = "config-host:config.git"
+			p := &prompt{answer: testToken}
+			opts := sb.opts
+			opts.Auth = Auth{CredentialsFile: sb.credentialsFile(), Prompt: p.ask}
+			if tt.token {
+				opts.Auth.Token, opts.Auth.Prompt = testToken, noPrompt(t)
+			}
+
+			r, err := Clone(t.Context(), url, cloneDir(t), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertRemoteURL(t, r, url)
+			if want := []string{srv.privateURL("config.git")}; !tt.token && !slices.Equal(p.urls, want) {
+				t.Errorf("asked for a token for %q, want %q", p.urls, want)
+			}
+
+			sb.commitUpstream(upstream, "base.toml", "[packages]\n")
+			r.Auth.Prompt = noPrompt(t)
+			if err := r.Pull(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertContent(t, filepath.Join(r.Dir, "base.toml"), "[packages]\n")
+
+			if !tt.token {
+				return
+			}
+			writeFile(t, filepath.Join(r.Dir, "fedora.toml"), "")
+			if err := r.CommitAll(t.Context(), "Add fedora.toml"); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Push(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if local, remote := sb.git(r.Dir, "rev-parse", "HEAD"), sb.git(upstream, "rev-parse", "main"); local != remote {
+				t.Errorf("the server's main is %s, want %s", remote, local)
+			}
+		})
+	}
+}
+
 // cloneWithPrompt clones the server's private repo, typing testToken at the
 // prompt.
 func cloneWithPrompt(t *testing.T, sb *sandbox, srv *gitServer) (*Repo, *prompt) {
@@ -505,6 +565,9 @@ func TestDirty(t *testing.T) {
 
 func TestRemoteURL(t *testing.T) {
 	sb := newSandbox(t)
+	// git connects to another URL than the one set, but the one set is the
+	// remote's URL.
+	sb.setGlobal("url.git@example.com:.insteadOf", "https://example.com/")
 	r := initWithCommit(t, sb)
 	assertRemoteURL(t, r, "")
 

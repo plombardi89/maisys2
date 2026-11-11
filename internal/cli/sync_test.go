@@ -300,6 +300,18 @@ func TestSyncFirstRunExistingClone(t *testing.T) {
 			},
 			pulled: true,
 		},
+		{
+			name: "--dir is a clone of the URL, which git rewrites",
+			setup: func(e *testEnv) ([]string, string, string) {
+				// The URL is the clone's, as its config sets it, rather
+				// than the one git connects to.
+				const url = "https://example.invalid/me/config.git"
+				e.git(e.t.TempDir(), "config", "--global", "url."+e.newRemote()+".insteadOf", url)
+				dir := e.cloneOf(url)
+				return []string{"sync", url, "--dir", dir, "--machine", fc44}, dir, url
+			},
+			pulled: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
