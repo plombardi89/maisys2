@@ -21,6 +21,7 @@ import (
 	"github.com/plombardi89/maisys2/internal/gitrepo"
 	"github.com/plombardi89/maisys2/internal/modules"
 	"github.com/plombardi89/maisys2/internal/resource"
+	"github.com/plombardi89/maisys2/internal/resource/removers"
 	"github.com/plombardi89/maisys2/internal/system"
 )
 
@@ -166,9 +167,10 @@ func processEnvironment(abort <-chan struct{}, stdout, stderr io.Writer, getenv 
 		stdoutTerminal: func() bool {
 			return outTerminal
 		},
-		abort:   abort,
-		now:     time.Now,
-		modules: modules.All(),
+		abort:    abort,
+		now:      time.Now,
+		modules:  modules.All(),
+		removers: removers.All(),
 		newRunner: func(opts system.Options) system.Runner {
 			return system.NewRunner(opts)
 		},

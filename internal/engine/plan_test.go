@@ -610,3 +610,36 @@ func TestPlanWithoutModulesWithResources(t *testing.T) {
 		t.Errorf("plan = %+v, want nothing to do", p)
 	}
 }
+
+// stopError is a check error that stops the whole sync.
+type stopError struct{}
+
+func (stopError) Error() string   { return "can't find the latest version" }
+func (stopError) StopsSync() bool { return true }
+
+func TestPlanStopError(t *testing.T) {
+	e := newTestEnv(t)
+	failing := res("fake:a", resource.Create, "a")
+	failing.checkErr = errors.New("an ordinary failure")
+	e.add("alpha", nil, failing)
+	stopping := res("fake:b", resource.Create, "b")
+	stopping.checkErr = fmt.Errorf("checking b: %w", stopError{})
+	e.add("beta", nil, stopping)
+
+	p, err := NewPlan(t.Context(), e.input())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.StopError(); !errors.As(err, new(stopError)) {
+		t.Errorf("StopError() = %v, want the lookup error, which stops the sync", err)
+	}
+
+	e = newTestEnv(t)
+	e.add("alpha", nil, failing)
+	if p, err = NewPlan(t.Context(), e.input()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.StopError(); err != nil {
+		t.Errorf("StopError() = %v, want nil: an ordinary failure only fails its module", err)
+	}
+}

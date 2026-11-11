@@ -1,0 +1,66 @@
+package pkg
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/plombardi89/maisys2/internal/config"
+	"github.com/plombardi89/maisys2/internal/facts"
+	"github.com/plombardi89/maisys2/internal/system"
+)
+
+// rebootRequired is the file Ubuntu creates when an upgrade needs a
+// reboot.
+const rebootRequired = "/var/run/reboot-required"
+
+// needsReboot is what dnf needs-restarting -r says, in dnf 4 and dnf 5,
+// when a reboot is needed.
+const needsReboot = "Reboot is required to fully utilize these updates."
+
+// RebootRecommended reports whether the system f recommends a reboot to
+// finish installing package upgrades: on Ubuntu, when
+// /var/run/reboot-required exists; on Fedora, when dnf needs-restarting -r
+// says so. Elsewhere it reports false. It runs commands with r, never as
+// root. If it can't tell, it reports false, with an error saying why.
+func RebootRecommended(ctx context.Context, r system.Runner, f *facts.System) (bool, error) {
+	if f == nil || (f.OS != config.Ubuntu && f.OS != config.Fedora) {
+		return false, nil
+	}
+	m, err := NewManager(r, f)
+	if err != nil {
+		return false, err
+	}
+	return m.rebootRecommended(ctx)
+}
+
+func (m *Manager) rebootRecommended(ctx context.Context) (bool, error) {
+	if _, ok := m.backend.(apt); ok {
+		return m.exists(rebootRequired), nil
+	}
+	c := system.Cmd{
+		Name:      "dnf",
+		Args:      []string{"needs-restarting", "-r"},
+		AllowExit: []int{1}, // a reboot is recommended, or it failed
+		Label:     "dnf needs-restarting",
+	}
+	res, err := m.runner.Run(ctx, c)
+	if err != nil {
+		return false, err
+	}
+	if res.ExitCode == 1 {
+		// dnf exits with 1 for any error too, such as repo metadata it
+		// can't download, and dnf 4 when the plugin isn't installed.
+		out := string(res.Stdout) + string(res.Stderr)
+		switch {
+		case strings.Contains(out, needsReboot):
+			return true, nil
+		case strings.Contains(out, "No such command"):
+			return false, fmt.Errorf("dnf needs-restarting isn't installed: %s", strings.TrimSpace(out))
+		default:
+			c.AllowExit = nil
+			return false, system.CheckExit(c, res)
+		}
+	}
+	return false, nil
+}

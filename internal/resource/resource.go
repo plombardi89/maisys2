@@ -7,9 +7,11 @@ package resource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/plombardi89/maisys2/internal/config"
@@ -112,6 +114,13 @@ type Change struct {
 	// or admin on Windows. A resource's changes need it anyway if the
 	// resource is Privileged; a removal's need it only if this is set.
 	Privileged bool
+	// Record, for a change that doesn't apply, is the record the resource
+	// should have in the state file, because what's there is already right
+	// but the record is missing or out of date, as when you edited a file
+	// to what the config now says. The engine saves it when the plan is
+	// applied, without showing or counting it, filling it in as it fills
+	// in Apply's records. Nil keeps the record there is.
+	Record *state.Record
 }
 
 // Runtime is what resources check and apply with. It's shared by every
@@ -134,6 +143,36 @@ type Runtime struct {
 	Log io.Writer
 	// Now returns the current time.
 	Now func() time.Time
+
+	sharedMu sync.Mutex
+	shared   map[any]any
+}
+
+// Shared returns the value the resources of one sync share under key, such
+// as the package manager or the download client, making it with create the
+// first time it's asked for. A failed create isn't remembered.
+func (rt *Runtime) Shared(key any, create func() (any, error)) (any, error) {
+	rt.sharedMu.Lock()
+	defer rt.sharedMu.Unlock()
+	if v, ok := rt.shared[key]; ok {
+		return v, nil
+	}
+	v, err := create()
+	if err != nil {
+		return nil, err
+	}
+	rt.SetShared(key, v)
+	return v, nil
+}
+
+// SetShared sets the value shared under key, for callers that make it
+// before the sync plans: Shared returns it from then on. The caller must
+// not call it while resources may call Shared.
+func (rt *Runtime) SetShared(key, value any) {
+	if rt.shared == nil {
+		rt.shared = map[any]any{}
+	}
+	rt.shared[key] = value
 }
 
 // Resource is one thing a module manages. A module's resources are planned
@@ -148,7 +187,10 @@ type Resource interface {
 	// once it's taken out of the config (see Remover).
 	Kind() string
 	// Targets are the paths the resource owns, used for the ownership
-	// check. They're recorded as the record's Paths unless Apply sets them.
+	// check: absolute, or "~/..." in the home folder. They're recorded as
+	// the record's Paths unless Apply sets them. Once a resource is
+	// applied, the resources after it whose targets are inside its own are
+	// checked again (see Check).
 	Targets() []string
 	// Privileged reports whether applying the resource needs root on
 	// Linux (sudo), or admin on Windows.
@@ -158,7 +200,9 @@ type Resource interface {
 	// resources' checks. If it can't check without root while sudo needs
 	// a password, it returns an error wrapping system.ErrNeedsPassword (as
 	// the Runner does), or a change with Action Unknown, and the plan says
-	// it's checked during apply.
+	// it's checked during apply. It's run again while the plan is applied,
+	// just before the resource is reached, if a resource applied before it
+	// owns a folder one of its targets is in.
 	Check(ctx context.Context, rt *Runtime) (Change, error)
 	// Apply makes the change Check found, or, if Check's change was
 	// Unknown, checks again and makes whatever change is needed. It's
@@ -178,13 +222,30 @@ type Remover interface {
 	// Kind is the kind of resource the Remover removes.
 	Kind() string
 	// CheckRemove says what removing the thing rec records would do, as
-	// Check does for a resource: Remove, Warn (for example "left in
-	// place"), NoChange if there's nothing left to remove, or Orphan to
-	// leave it and keep its record.
+	// Check does for a resource: Remove, or Warn for a removal that needs
+	// your attention; NoChange if there's nothing to remove, which drops
+	// the record, with Notes for something left in place, such as a file
+	// changed outside maisys, so the plan says so once; or Orphan to leave
+	// it and keep its record.
 	CheckRemove(ctx context.Context, rt *Runtime, rec state.Record) (Change, error)
 	// Remove removes the thing rec records. Its record is deleted once
 	// Remove succeeds.
 	Remove(ctx context.Context, rt *Runtime, rec state.Record) error
+}
+
+// SyncStopper is implemented by errors that stop the whole sync, rather
+// than fail only the module they happen in. A failed lookup of a "latest"
+// version is one: issue #1 says the sync stops, naming the tool and the
+// upstream.
+type SyncStopper interface {
+	StopsSync() bool
+}
+
+// StopsSync reports whether err, or an error it wraps, stops the whole
+// sync.
+func StopsSync(err error) bool {
+	var s SyncStopper
+	return errors.As(err, &s) && s.StopsSync()
 }
 
 // Removers holds the Remover for each kind of resource maisys removes,

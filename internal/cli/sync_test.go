@@ -12,13 +12,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/plombardi89/maisys2/internal/config"
+	"github.com/plombardi89/maisys2/internal/facts"
 	"github.com/plombardi89/maisys2/internal/gitrepo"
 	"github.com/plombardi89/maisys2/internal/settings"
+	"github.com/plombardi89/maisys2/internal/system"
+	"github.com/plombardi89/maisys2/internal/system/systemtest"
 )
 
 // notSetUp is how sync fails on a machine that isn't set up, when it isn't
@@ -373,8 +377,9 @@ func TestSyncFirstRunErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "git isn't installed",
+			name: "git isn't installed, and maisys can't install it here",
 			setup: func(e *testEnv) ([]string, string) {
+				e.system.OS, e.system.OSID, e.system.PrettyName = "", "debian", "Debian GNU/Linux 13 (trixie)"
 				e.findGit = func() (string, error) { return "", gitrepo.ErrNoGit }
 				return []string{"sync", e.newRemote()}, "maisys: git isn't installed\nInstall it with: "
 			},
@@ -503,6 +508,123 @@ func writeTemp(t *testing.T, files map[string]string) string {
 	dir := t.TempDir()
 	writeFiles(t, dir, files)
 	return dir
+}
+
+// TestSyncFirstRunInstallsGit runs a first sync on a Fedora or Ubuntu
+// without git: it installs git first, as root.
+func TestSyncFirstRunInstallsGit(t *testing.T) {
+	tests := []struct {
+		name string
+		// system is the live system, if it isn't the test system.
+		system  *facts.System
+		machine string
+		pkg     string
+		install string
+	}{
+		{name: "fedora", machine: fc44, pkg: "git-core", install: "dnf install -y git-core"},
+		{
+			name:    "ubuntu",
+			system:  &facts.System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "26.04", PrettyName: "Ubuntu 26.04 LTS", Arch: config.AMD64, RawArch: "amd64"},
+			machine: "phil-workp14s",
+			pkg:     "git",
+			install: "apt-get install -y --no-remove -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold git",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.useGit()
+			if tt.system != nil {
+				e.system = *tt.system
+			}
+			e.runner.SudoStatus = system.SudoNeedsPassword
+			git, installed := e.findGit, false
+			e.findGit = func() (string, error) {
+				if !installed {
+					return "", gitrepo.ErrNoGit
+				}
+				return git()
+			}
+			// Whether apt's lists need refreshing depends on the machine
+			// the test runs on.
+			e.runner.On("apt-get update", systemtest.Respond(0, ""))
+			e.runner.On(strings.Fields(tt.install)[0]+" install", func(context.Context, system.Cmd) (system.Result, error) {
+				installed = true
+				return system.Result{}, nil
+			})
+
+			code, stdout, stderr := e.run("sync", e.newRemote(), "--machine", tt.machine)
+			wantSynced(t, code, stdout, stderr)
+			if want := "maisys: installing git (" + tt.pkg + "), which maisys needs for the config repo\n"; !strings.HasPrefix(stdout, want) {
+				t.Errorf("stdout = %q, want it to start with %q", stdout, want)
+			}
+			var installs []string
+			for _, c := range e.runner.Calls() {
+				if !c.Cmd.Root || !c.InSession {
+					t.Errorf("%s ran outside the sudo session", c.Cmd)
+				}
+				if line := c.Cmd.String(); line != "apt-get update" {
+					installs = append(installs, line)
+				}
+			}
+			if !slices.Equal(installs, []string{tt.install}) || e.runner.SudoStarts() != 1 {
+				t.Errorf("commands = %q, sudo started %d times; want %q in one sudo session", installs, e.runner.SudoStarts(), tt.install)
+			}
+		})
+	}
+}
+
+func TestSyncFirstRunCantInstallGit(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(e *testEnv)
+		want  string
+	}{
+		{
+			name: "sudo is missing",
+			setup: func(e *testEnv) {
+				e.runner.SudoStatus, e.runner.OS, e.runner.User = system.SudoMissing, config.Fedora, "phil"
+			},
+			want: "maisys: installing git: sudo isn't installed, and some steps need to run as root.\n" +
+				"To fix this, run these commands as root, then log out and back in and run maisys sync again:\n" +
+				"  dnf install -y sudo\n  usermod -aG wheel phil\n",
+		},
+		{
+			name: "the wrong password",
+			setup: func(e *testEnv) {
+				e.runner.SudoStatus = system.SudoNeedsPassword
+				e.runner.StartErr = errors.New("sudo couldn't check your password: sudo: 3 incorrect password attempts")
+			},
+			want: "maisys: installing git: sudo couldn't check your password: sudo: 3 incorrect password attempts\n",
+		},
+		{
+			name: "dnf fails",
+			setup: func(e *testEnv) {
+				e.runner.On("dnf install", systemtest.Fail(1, "Errors during downloading metadata for repository 'fedora':\n"+
+					"  - Curl error (6): Couldn't resolve host name for https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64\n"))
+			},
+			want: "maisys: installing git: dnf install failed with exit code 1:\n  Errors during downloading metadata for repository 'fedora':\n" +
+				"  - Curl error (6): Couldn't resolve host name for https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.findGit = func() (string, error) { return "", gitrepo.ErrNoGit }
+			tt.setup(e)
+
+			code, stdout, stderr := e.run("sync", filepath.Join(t.TempDir(), "config.git"))
+			if code != exitError || !strings.HasPrefix(stderr, tt.want) {
+				t.Errorf("exit code = %d, stderr:\n%s\nwant %d, and stderr to start with:\n%s", code, stderr, exitError, tt.want)
+			}
+			if want := "maisys: installing git (git-core), which maisys needs for the config repo\n"; stdout != want {
+				t.Errorf("stdout = %q, want %q", stdout, want)
+			}
+			if s := e.loadSettings(); s != nil || exists(e.defaultRepoDir()) {
+				t.Errorf("settings %+v, and the default folder exists: %t; want nothing set up", s, exists(e.defaultRepoDir()))
+			}
+		})
+	}
 }
 
 func TestGitOptions(t *testing.T) {

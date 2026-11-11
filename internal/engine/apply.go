@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -85,14 +86,32 @@ type RemovalResult struct {
 // and everything else carries on. Modules that failed in the plan count as
 // failed too.
 //
+// Changes of resources in a group (resource.Grouped), such as package
+// installs, are applied in one step, with one call to ApplyGroup, when the
+// first of them is reached. That step takes in every change of the group
+// that's ready by then, from any module: one whose module will be applied,
+// whose module's dependencies have been applied, and whose module has no
+// other change before it still to make, such as adding the repo a package
+// comes from. The rest are applied in another step, when the first of them
+// is reached. A change of the group that fails makes its own module fail,
+// at that change.
+//
+// Applying a resource may change what's inside the folders it owns, as
+// replacing a checkout replaces the checkouts inside it, after their
+// checks ran. So a resource whose targets are inside a target of one
+// applied before it, in its module or an earlier one, is checked again
+// just before it's reached, and applied if it needs it then, as the plan's
+// changes are. A check that fails then makes its module fail.
+//
 // Cancelling ctx (on Ctrl-C) lets the step in progress finish, with a
 // context that isn't cancelled, and then stops Apply before the next step;
 // in.Abort stops the step in progress too. At the end, Apply records when
 // the sync ended and how in the state file. A plan without changes can be
-// applied too: that only deletes the records of things that are already
-// gone, and records the sync.
+// applied too: that only brings the state file up to date, deleting the
+// records of things that are already gone and saving those that checks
+// found out of date (see resource.Change.Record), and records the sync.
 func Apply(ctx context.Context, p *Plan, in ApplyInput) *Result {
-	a := &applier{plan: p, in: in, ctx: ctx, res: &Result{}, stopped: map[string]string{}}
+	a := &applier{plan: p, in: in, ctx: ctx, res: &Result{}, stopped: map[string]string{}, finished: map[string]bool{}, grouped: map[*Item]error{}}
 	var cancel context.CancelFunc
 	a.step, cancel = context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
@@ -141,6 +160,15 @@ type applier struct {
 	// stopped maps each module that failed or was skipped to the failed
 	// module that caused it.
 	stopped map[string]string
+	// finished holds the modules that have been applied, failed or
+	// skipped.
+	finished map[string]bool
+	// grouped holds the items applied with their group, with why they
+	// failed, or nil if they were applied.
+	grouped map[*Item]error
+	// applied holds the targets of the resources applied so far, as
+	// targets returns them.
+	applied []string
 	// sudoErr is why the sudo session couldn't be started, if it couldn't.
 	sudoErr error
 }
@@ -160,7 +188,7 @@ func (a *applier) done() bool {
 
 // modules applies each module's changes.
 func (a *applier) modules() {
-	for _, m := range a.plan.Modules {
+	for i, m := range a.plan.Modules {
 		if a.done() {
 			return
 		}
@@ -173,44 +201,196 @@ func (a *applier) modules() {
 			mr.SkippedBecause = m.SkippedBecause
 			a.stopped[m.Name] = m.SkippedBecause
 		default:
-			if i := slices.IndexFunc(m.DependsOn, func(dep string) bool { return a.stopped[dep] != "" }); i >= 0 {
-				mr.SkippedBecause = a.stopped[m.DependsOn[i]]
+			if d := slices.IndexFunc(m.DependsOn, func(dep string) bool { return a.stopped[dep] != "" }); d >= 0 {
+				mr.SkippedBecause = a.stopped[m.DependsOn[d]]
 				a.stopped[m.Name] = mr.SkippedBecause
 				break
 			}
-			a.module(m, &mr)
+			a.module(i, &mr)
 		}
 		a.res.Modules = append(a.res.Modules, mr)
+		a.finished[m.Name] = true
 	}
 }
 
-// module applies the changes of module m, which hasn't failed, recording
-// what happened in mr.
-func (a *applier) module(m *ModulePlan, mr *ModuleResult) {
-	for _, item := range m.Items {
+// module applies the changes of the plan's module i, which hasn't failed,
+// recording what happened in mr. The records of its resources with
+// nothing to apply are brought up to date (see refresh). A resource inside
+// a folder something applied before it owns is checked again first (see
+// inApplied).
+func (a *applier) module(i int, mr *ModuleResult) {
+	m := a.plan.Modules[i]
+	for k, item := range m.Items {
+		if a.inApplied(item) {
+			if a.done() {
+				return
+			}
+			if err := a.recheck(item); err != nil {
+				a.fail(m, k, mr, fmt.Errorf("%s: %w", item.summary(), err))
+				return
+			}
+		}
 		if !item.Change.Action.Applies() {
+			if a.refresh(m.Name, item) != nil {
+				return
+			}
 			continue
 		}
-		if a.done() {
-			return
+		if _, ok := a.grouped[item]; !ok {
+			if a.done() {
+				return
+			}
+			if g, ok := item.Resource.(resource.Grouped); ok && !a.needsSudo(item) {
+				a.group(i, k, g)
+				if a.res.Err != nil {
+					return
+				}
+			}
 		}
-		a.progress(m.Name, item.Change.Action, item.summary())
-		var err error
-		if item.privileged() && a.sudoErr != nil {
-			err = a.sudoErr
-		} else {
-			err = a.apply(m.Name, item.Resource)
+		err, ok := a.grouped[item]
+		if !ok {
+			a.progress(m.Name, item.Change.Action, item.summary())
+			if a.needsSudo(item) {
+				err = a.sudoErr
+			} else {
+				err = a.apply(m.Name, item.Resource)
+			}
 		}
 		if err != nil {
 			if a.res.Err != nil {
 				return
 			}
-			mr.Err = fmt.Errorf("%s: %w", item.summary(), err)
-			a.stopped[m.Name] = m.Name
+			a.fail(m, k, mr, fmt.Errorf("%s: %w", item.summary(), err))
 			return
 		}
 		mr.Applied++
 	}
+}
+
+// fail makes module m fail at its item k with err.
+func (a *applier) fail(m *ModulePlan, k int, mr *ModuleResult, err error) {
+	mr.Err = err
+	a.stopped[m.Name] = m.Name
+	// Later changes applied with their group were applied all the same.
+	for _, later := range m.Items[k+1:] {
+		if err, ok := a.grouped[later]; ok && err == nil {
+			mr.Applied++
+		}
+	}
+}
+
+// inApplied reports whether one of item's targets is inside a folder that
+// a resource applied in this sync owns, which may have changed what the
+// item's check found: replacing a checkout, say, moves the checkouts
+// inside it aside too. Items already applied with their group aren't.
+func (a *applier) inApplied(item *Item) bool {
+	if _, ok := a.grouped[item]; ok || len(a.applied) == 0 {
+		return false
+	}
+	for _, target := range a.targets(item.Resource) {
+		for _, dir := range a.applied {
+			if rel, err := filepath.Rel(dir, target); err == nil && rel != "." && filepath.IsLocal(rel) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// recheck checks item again, and keeps the change it finds now.
+func (a *applier) recheck(item *Item) error {
+	c, err := item.Resource.Check(a.step, a.plan.rt)
+	if err != nil {
+		return fmt.Errorf("checking it again: %w", err)
+	}
+	item.Change = c
+	return nil
+}
+
+// targets returns r's targets as clean absolute paths, with "~/" expanded
+// to the home folder, leaving out those that aren't absolute paths.
+func (a *applier) targets(r resource.Resource) []string {
+	var paths []string
+	for _, t := range r.Targets() {
+		if rest, ok := strings.CutPrefix(t, "~/"); ok {
+			t = filepath.Join(a.plan.rt.Paths.Home, filepath.FromSlash(rest))
+		}
+		if t = filepath.Clean(t); filepath.IsAbs(t) {
+			paths = append(paths, t)
+		}
+	}
+	return paths
+}
+
+// needsSudo reports whether applying item needs root, which the sudo
+// session couldn't be started for.
+func (a *applier) needsSudo(item *Item) bool {
+	return item.privileged() && a.sudoErr != nil
+}
+
+// group applies, in one step, the change of item k of the plan's module i,
+// which is in first's group, together with the group's other changes that
+// are ready: those of the rest of module i, and of the modules after it,
+// up to the first change of each module that isn't in the group or can't
+// be applied now. It records how each one went in a.grouped, and saves
+// the records of those applied.
+func (a *applier) group(i, k int, first resource.Grouped) {
+	var items []*Item
+	var members []resource.Member
+	for j := i; j < len(a.plan.Modules); j++ {
+		m, start := a.plan.Modules[j], k
+		if j > i {
+			if !a.ready(m) {
+				continue
+			}
+			start = 0
+		}
+		for _, item := range m.Items[start:] {
+			if !item.Change.Action.Applies() {
+				continue
+			}
+			if err, ok := a.grouped[item]; ok {
+				if err != nil {
+					break
+				}
+				continue
+			}
+			g, ok := item.Resource.(resource.Grouped)
+			if !ok || g.Group() != first.Group() || a.needsSudo(item) {
+				break
+			}
+			items = append(items, item)
+			members = append(members, resource.Member{Module: m.Name, Resource: g})
+		}
+	}
+
+	for n, item := range items {
+		a.progress(members[n].Module, item.Change.Action, item.summary())
+	}
+	outcomes := first.ApplyGroup(a.step, a.plan.rt, members)
+	for n, item := range items {
+		if n >= len(outcomes) {
+			a.grouped[item] = fmt.Errorf("applying group %s gave no outcome for it", first.Group())
+			continue
+		}
+		o := outcomes[n]
+		if o.Err == nil {
+			a.put(members[n].Module, item.Resource, o.Record)
+			a.applied = append(a.applied, a.targets(item.Resource)...)
+		}
+		a.grouped[item] = o.Err
+	}
+	_ = a.save()
+}
+
+// ready reports whether module m, which hasn't been reached yet, can have
+// changes applied now: it will be applied, and every module it depends on
+// has been.
+func (a *applier) ready(m *ModulePlan) bool {
+	if !m.applies() || a.stopped[m.Name] != "" {
+		return false
+	}
+	return !slices.ContainsFunc(m.DependsOn, func(dep string) bool { return !a.finished[dep] || a.stopped[dep] != "" })
 }
 
 // apply applies one resource, and saves its record. If the state file
@@ -220,6 +400,31 @@ func (a *applier) apply(module string, r resource.Resource) error {
 	if err != nil {
 		return err
 	}
+	a.applied = append(a.applied, a.targets(r)...)
+	a.put(module, r, rec)
+	return a.save()
+}
+
+// refresh brings the record of item, whose change doesn't apply, up to
+// date, and saves it: to the record its check says the resource should
+// have, if it says one, or else to belong to module, if it belonged to
+// another one. If the state file can't be saved, it sets a.res.Err.
+func (a *applier) refresh(module string, item *Item) error {
+	switch prev, ok := a.in.Store.Get(item.Resource.ID()); {
+	case item.Change.Record != nil:
+		a.put(module, item.Resource, *item.Change.Record)
+	case ok && prev.Module != module:
+		prev.Module = module
+		a.in.Store.Put(prev)
+	default:
+		return nil
+	}
+	return a.save()
+}
+
+// put puts the record of resource r of module into the state, filling in
+// what Apply leaves to the engine.
+func (a *applier) put(module string, r resource.Resource, rec state.Record) {
 	rec.ID, rec.Kind, rec.Module = r.ID(), r.Kind(), module
 	if len(rec.Paths) == 0 {
 		rec.Paths = r.Targets()
@@ -228,7 +433,6 @@ func (a *applier) apply(module string, r resource.Resource) error {
 		rec.Updated = a.plan.rt.Now()
 	}
 	a.in.Store.Put(rec)
-	return a.save()
 }
 
 // save saves the state file, or sets a.res.Err.

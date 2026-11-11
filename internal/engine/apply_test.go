@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/state"
@@ -434,5 +438,246 @@ func TestApplyStateCantBeSaved(t *testing.T) {
 	result.Render(&b)
 	if !strings.HasPrefix(b.String(), "Nothing changed.\nStopped: saving the state file: ") {
 		t.Errorf("Render() = %q, want it to say the sync stopped", b.String())
+	}
+}
+
+// TestApplyRefreshesRecords applies a plan whose only effect is to bring
+// records up to date: the plan has nothing to change and applying it shows
+// nothing, but the records are saved, and only once it's applied.
+func TestApplyRefreshesRecords(t *testing.T) {
+	e := newTestEnv(t)
+	before := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, rec := range []state.Record{
+		{ID: "file:~/.gitconfig", Module: "files", Details: map[string]string{"sha256": "old"}},
+		{ID: "file:~/.vimrc", Module: "dotfiles", Details: map[string]string{"sha256": "vim"}},
+		{ID: "file:~/.zshrc", Module: "files", Details: map[string]string{"sha256": "zsh"}},
+	} {
+		rec.Kind, rec.Updated = "fake", before
+		e.store.Put(rec)
+	}
+	if err := e.store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	edited := res("file:~/.gitconfig", resource.NoChange, "")
+	edited.targets = []string{"~/.gitconfig"}
+	edited.change.Record = &state.Record{Details: map[string]string{"sha256": "new"}}
+	taken := res("file:~/.tmux.conf", resource.NoChange, "")
+	taken.change.Record = &state.Record{Paths: []string{"~/.tmux.conf"}, Details: map[string]string{"sha256": "tmux"}, TookOver: true}
+	e.add("files", nil, edited, res("file:~/.vimrc", resource.NoChange, ""), res("file:~/.zshrc", resource.NoChange, ""), taken)
+
+	p := e.plan()
+	var plan bytes.Buffer
+	p.Render(&plan, false)
+	if want := "Plan for phil-workp14s (ubuntu 26.04, amd64)\n\nNothing to change.\n"; plan.String() != want || p.HasChanges() {
+		t.Errorf("Render() =\n%s\nHasChanges() = %t; want\n%s", plan.String(), p.HasChanges(), want)
+	}
+	saved, err := state.Load(e.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := saved.Get("file:~/.gitconfig"); rec.Details["sha256"] != "old" {
+		t.Errorf("the plan saved the record %+v, want it saved only when the plan is applied", rec)
+	}
+
+	var progress bytes.Buffer
+	result := Apply(t.Context(), p, ApplyInput{Store: e.store, Progress: &progress})
+	var b bytes.Buffer
+	result.Render(&b)
+	if b.String() != "Nothing changed.\n" || progress.Len() > 0 || len(e.steps.get()) > 0 {
+		t.Errorf("Render() = %q, progress = %q, steps = %q; want nothing done or shown", b.String(), progress.String(), e.steps.get())
+	}
+
+	saved, err = state.Load(e.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]state.Record{
+		"file:~/.gitconfig": {Paths: []string{"~/.gitconfig"}, Details: map[string]string{"sha256": "new"}, Updated: testNow},
+		"file:~/.vimrc":     {Details: map[string]string{"sha256": "vim"}, Updated: before},
+		"file:~/.zshrc":     {Details: map[string]string{"sha256": "zsh"}, Updated: before},
+		"file:~/.tmux.conf": {Paths: []string{"~/.tmux.conf"}, Details: map[string]string{"sha256": "tmux"}, TookOver: true, Updated: testNow},
+	}
+	for id, w := range want {
+		w.ID, w.Kind, w.Module = id, "fake", "files"
+		if got, ok := saved.Get(id); !ok || !reflect.DeepEqual(got, w) {
+			t.Errorf("saved record of %s = %+v, want %+v", id, got, w)
+		}
+	}
+}
+
+// TestApplyRefreshesOnlyAppliedModules checks that the records of modules
+// that failed or were skipped aren't brought up to date.
+func TestApplyRefreshesOnlyAppliedModules(t *testing.T) {
+	e := newTestEnv(t)
+	for _, id := range []string{"file:~/.bashrc", "file:~/.inputrc", "file:~/.vimrc"} {
+		e.store.Put(state.Record{ID: id, Kind: "fake", Module: "old"})
+	}
+	refreshed := func(id string) *fakeResource {
+		r := res(id, resource.NoChange, "")
+		r.change.Record = &state.Record{Details: map[string]string{"sha256": "new"}}
+		return r
+	}
+	failing := res("file:~/.profile", resource.Create, "~/.profile")
+	failing.checkErr = errors.New("permission denied")
+	e.add("broken", nil, refreshed("file:~/.bashrc"), failing)
+	e.add("skipped", []string{"broken"}, refreshed("file:~/.inputrc"))
+	e.add("files", nil, refreshed("file:~/.vimrc"))
+
+	e.apply(t.Context())
+	saved, err := state.Load(e.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, module := range map[string]string{"file:~/.bashrc": "old", "file:~/.inputrc": "old", "file:~/.vimrc": "files"} {
+		if rec, _ := saved.Get(id); rec.Module != module || (module == "files") != (rec.Details["sha256"] == "new") {
+			t.Errorf("saved record of %s = %+v, want it refreshed only if its module was applied", id, rec)
+		}
+	}
+}
+
+// nested is a resource at target whose check finds want once replaced
+// reports true, and nothing before, counting its checks.
+func nested(id, target string, replaced *bool, want resource.Action, checks *atomic.Int32) *fakeResource {
+	r := &fakeResource{id: id, targets: []string{target}}
+	r.onCheck = func(context.Context, *resource.Runtime) (resource.Change, error) {
+		checks.Add(1)
+		if *replaced {
+			return resource.Change{Action: want, Summary: id + " again"}, nil
+		}
+		return resource.Change{}, nil
+	}
+	return r
+}
+
+// TestApplyRechecksInsideApplied replaces a folder that other resources
+// are in, after their checks ran: they're checked again just before
+// they're reached, and applied if they need it then, as their check finds
+// it then.
+func TestApplyRechecksInsideApplied(t *testing.T) {
+	e := newTestEnv(t)
+	home := filepath.Join(t.TempDir(), "home")
+	replaced := false
+	parent := res("git-checkout:omz", resource.Warn, "oh-my-zsh: ~/.oh-my-zsh isn't a checkout (will back up and replace)")
+	parent.targets = []string{filepath.Join(home, ".oh-my-zsh")}
+	parent.onApply = func(context.Context, *resource.Runtime) (state.Record, error) {
+		replaced = true
+		return state.Record{}, nil
+	}
+	var inside, outside atomic.Int32
+	stale := nested("git-checkout:stale", "~/.oh-my-zsh/custom/plugins/stale", &replaced, resource.Create, &inside)
+	stale.onCheck = func(context.Context, *resource.Runtime) (resource.Change, error) {
+		inside.Add(1)
+		if replaced {
+			return resource.Change{Action: resource.Create, Summary: "stale (main)"}, nil
+		}
+		return resource.Change{Action: resource.Update, Summary: "stale a1b2c3d → d4e5f6a (main)"}, nil
+	}
+	e.add("shell", nil,
+		parent,
+		nested("git-checkout:plugin", filepath.Join(home, ".oh-my-zsh", "custom", "plugins", "plugin"), &replaced, resource.Create, &inside),
+		nested("symlink:theme", "~/.oh-my-zsh/custom/themes/theme.zsh-theme", &replaced, resource.Create, &inside),
+		stale,
+		nested("file:sibling", filepath.Join(home, ".oh-my-zsh-sibling"), &replaced, resource.Create, &outside),
+		nested("file:same", "~/.oh-my-zsh/", &replaced, resource.Create, &outside),
+	)
+	e.add("later", nil, nested("git-checkout:later", "~/.oh-my-zsh/custom/plugins/later", &replaced, resource.Update, &inside))
+	e.add("other", nil, nested("file:other", "~/.zshrc", &replaced, resource.Update, &outside))
+	in := e.input()
+	in.Paths.Home = home
+	p, err := NewPlan(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var progress bytes.Buffer
+	result := Apply(t.Context(), p, ApplyInput{Store: e.store, Progress: &progress})
+	wantProgress := "shell: ! oh-my-zsh: ~/.oh-my-zsh isn't a checkout (will back up and replace)\n" +
+		"shell: + git-checkout:plugin again\n" +
+		"shell: + symlink:theme again\n" +
+		"shell: + stale (main)\n" +
+		"later: ~ git-checkout:later again\n"
+	if progress.String() != wantProgress {
+		t.Errorf("progress =\n%s\nwant\n%s", progress.String(), wantProgress)
+	}
+	if changes, _ := result.Applied(); !result.OK() || changes != 5 {
+		t.Errorf("OK() = %t, Applied() = %d; want 5 changes applied", result.OK(), changes)
+	}
+	if n := inside.Load(); n != 8 {
+		t.Errorf("the resources inside ~/.oh-my-zsh were checked %d times, want twice each", n)
+	}
+	if n := outside.Load(); n != 3 {
+		t.Errorf("the resources outside ~/.oh-my-zsh were checked %d times, want once each", n)
+	}
+	if got, want := e.steps.get(), []string{"apply git-checkout:omz", "apply git-checkout:plugin", "apply symlink:theme", "apply git-checkout:stale", "apply git-checkout:later"}; !slices.Equal(got, want) {
+		t.Errorf("steps = %q, want %q", got, want)
+	}
+}
+
+// TestApplyRechecksOnlyAfterApplying checks that nothing is checked again
+// when the folder the resources are in wasn't applied.
+func TestApplyRechecksOnlyAfterApplying(t *testing.T) {
+	e := newTestEnv(t)
+	home := filepath.Join(t.TempDir(), "home")
+	replaced := false
+	var checks atomic.Int32
+	parent := nested("git-checkout:omz", "~/.oh-my-zsh", &replaced, resource.Create, &checks)
+	failing := res("git-checkout:other", resource.Create, "other")
+	failing.targets = []string{"~/.other"}
+	failing.applyErr = errors.New("couldn't clone")
+	e.add("shell", nil, parent, nested("git-checkout:plugin", "~/.oh-my-zsh/custom/plugins/plugin", &replaced, resource.Create, &checks))
+	e.add("broken", nil, failing)
+	e.add("later", nil, nested("git-checkout:later", "~/.other/later", &replaced, resource.Create, &checks))
+	in := e.input()
+	in.Paths.Home = home
+	p, err := NewPlan(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced = true
+	Apply(t.Context(), p, ApplyInput{Store: e.store})
+	if n := checks.Load(); n != 3 {
+		t.Errorf("the resources were checked %d times, want once each", n)
+	}
+}
+
+// TestApplyRecheckFails checks that a check that fails when it's run
+// again makes its module fail, and skips the modules that depend on it.
+func TestApplyRecheckFails(t *testing.T) {
+	e := newTestEnv(t)
+	home := filepath.Join(t.TempDir(), "home")
+	replaced := false
+	parent := res("git-checkout:omz", resource.Create, "oh-my-zsh (master)")
+	parent.targets = []string{"~/.oh-my-zsh"}
+	parent.onApply = func(context.Context, *resource.Runtime) (state.Record, error) {
+		replaced = true
+		return state.Record{}, nil
+	}
+	plugin := &fakeResource{id: "git-checkout:plugin", targets: []string{"~/.oh-my-zsh/custom/plugins/plugin"}}
+	plugin.onCheck = func(context.Context, *resource.Runtime) (resource.Change, error) {
+		if replaced {
+			return resource.Change{}, errors.New("couldn't look up main")
+		}
+		return resource.Change{}, nil
+	}
+	e.add("shell", nil, parent, plugin, res("file:~/.zshrc", resource.Create, "~/.zshrc"))
+	e.add("theme", []string{"shell"}, res("file:~/theme", resource.Create, "~/theme"))
+	in := e.input()
+	in.Paths.Home = home
+	p, err := NewPlan(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := Apply(t.Context(), p, ApplyInput{Store: e.store})
+	if got, want := e.steps.get(), []string{"apply git-checkout:omz"}; !slices.Equal(got, want) {
+		t.Errorf("steps = %q, want %q", got, want)
+	}
+	var b bytes.Buffer
+	result.Render(&b)
+	want := "Applied 1 change.\n" +
+		"shell failed: git-checkout plugin: checking it again: couldn't look up main\n" +
+		"theme skipped because shell failed.\n"
+	if b.String() != want {
+		t.Errorf("Render() =\n%s\nwant\n%s", b.String(), want)
 	}
 }
