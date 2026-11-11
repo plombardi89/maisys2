@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,15 @@ type testEnv struct {
 	// it with.
 	runner     *systemtest.FakeRunner
 	runnerOpts system.Options
+	// windows is what detecting a Windows host's details finds, and
+	// windowsErr how it fails, if it does. windowsDetections counts the
+	// detections.
+	windows           facts.Windows
+	windowsErr        error
+	windowsDetections int
+	// helper records how the elevated helper was started, as its pipe and
+	// secret.
+	helper []string
 }
 
 // testNow is the time maisys runs at in tests.
@@ -121,6 +131,22 @@ func (e *testEnv) environment(stdout, stderr *bytes.Buffer) *environment {
 		newRunner: func(opts system.Options) system.Runner {
 			e.runnerOpts = opts
 			return e.runner
+		},
+		detectWindows: func(_ context.Context, r system.Runner) (*facts.Windows, error) {
+			e.windowsDetections++
+			if r != system.Runner(e.runner) {
+				e.t.Error("Windows details were detected with another runner than the sync's")
+			}
+			if e.windowsErr != nil {
+				return nil, e.windowsErr
+			}
+			w := e.windows
+			w.Distros = slices.Clone(w.Distros)
+			return &w, nil
+		},
+		serveHelper: func(_ context.Context, pipe, secret string) error {
+			e.helper = []string{pipe, secret}
+			return nil
 		},
 	}
 }

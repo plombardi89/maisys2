@@ -1,7 +1,8 @@
-// Package system runs the commands maisys needs: as the user, or as root on
+// Package system runs the commands maisys needs: as the user, as root on
 // Linux through a sudo session that never asks for a password while
-// planning. Every command's command line, exit code and output go to the
-// run's log.
+// planning, or as admin on Windows through an elevated helper, which only
+// applying starts, with one UAC prompt. Every command's command line, exit
+// code and output go to the run's log.
 package system
 
 import (
@@ -30,11 +31,17 @@ type Cmd struct {
 	Dir string
 	// Env is extra environment, as NAME=value. Commands run with maisys's
 	// own environment plus LC_ALL=C, which Env can override. A command run
-	// as root gets only LC_ALL=C and Env, because sudo resets the rest.
+	// as root gets only LC_ALL=C and Env, because sudo resets the rest; one
+	// run as admin in Windows' elevated helper gets the helper's
+	// environment, plus LC_ALL=C and Env.
 	Env []string
 	// Stdin is the command's input. Nil means none.
 	Stdin io.Reader
-	// Root runs the command as root, with sudo -n. Only Linux has it.
+	// Root runs the command as root on Linux, with sudo -n, and as admin
+	// on Windows: in the elevated helper, or directly if maisys is
+	// elevated already. A command run in the elevated helper may run as
+	// another user (see adminSession), so it must be given every path it
+	// needs, and mustn't touch the user's own files or settings.
 	Root bool
 	// sudo marks a command that runs sudo, which keeps maisys's terminal
 	// (see procAttr).
@@ -54,6 +61,11 @@ type Cmd struct {
 	// their context is cancelled. One that tries to ask something anyway,
 	// as ssh does about a host key it doesn't know, fails at once.
 	Interactive bool
+	// Stream, if set, also receives the command's output and error
+	// output as it runs, a line at a time, for a command you watch, such
+	// as the first sync inside a new WSL distro. Both are still captured
+	// and logged.
+	Stream io.Writer
 }
 
 // String returns the command line, quoted for a POSIX shell where needed.
@@ -83,26 +95,32 @@ type Runner interface {
 	// Run runs c and waits for it to finish. An exit code other than 0
 	// that c doesn't allow is an *ExitError, returned with the result.
 	// While no sudo session is started, a command run as root never asks
-	// for a password: it fails with ErrNeedsPassword instead.
+	// for a password: it fails with ErrNeedsPassword instead (on Windows,
+	// with ErrNeedsAdmin, which is an ErrNeedsPassword too).
 	Run(ctx context.Context, c Cmd) (Result, error)
 }
 
 // SudoRunner is a Runner with a sudo session for the commands it runs as
-// root.
+// root. On Windows, the session is the elevated helper, which runs the
+// commands that need admin rights.
 type SudoRunner interface {
 	Runner
 	// CheckSudo reports whether sudo is installed and works without a
 	// password right now, without ever asking for one. If sudo is missing
 	// or the user may not use it, the error is a *SudoError saying what to
 	// run as root to fix that; any other error means sudo couldn't be
-	// checked or doesn't work.
+	// checked or doesn't work. On Windows, it reports SudoNoPassword if
+	// commands can run as admin now, and SudoNeedsPassword if that needs
+	// the UAC prompt StartSudo shows.
 	CheckSudo(ctx context.Context) (SudoStatus, error)
 	// StartSudo starts the session that applying runs in: unless sudo
 	// already works without a password, it runs sudo -v, the only command
 	// that may ask for one, and it keeps sudo's session alive until
-	// StopSudo or until ctx is done.
+	// StopSudo or until ctx is done. On Windows, unless maisys is elevated
+	// already, it starts the elevated helper, which shows the UAC prompt.
 	StartSudo(ctx context.Context) error
-	// StopSudo stops keeping the session alive.
+	// StopSudo stops keeping the session alive, or stops the elevated
+	// helper.
 	StopSudo()
 }
 
@@ -181,6 +199,9 @@ type ExecRunner struct {
 	logMu     sync.Mutex
 	verboseMu sync.Mutex
 	sudo      sudoSession
+	// admin runs the commands that need admin rights on Windows. It's nil
+	// elsewhere.
+	admin *adminSession
 }
 
 var _ SudoRunner = (*ExecRunner)(nil)
@@ -189,6 +210,7 @@ var _ SudoRunner = (*ExecRunner)(nil)
 func NewRunner(opts Options) *ExecRunner {
 	r := &ExecRunner{opts: opts}
 	r.sudo.r = r
+	r.admin = newAdminSession(r)
 	return r
 }
 
@@ -196,6 +218,9 @@ func NewRunner(opts Options) *ExecRunner {
 func (r *ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	if !c.Root {
 		return r.run(ctx, c, nil)
+	}
+	if r.admin != nil {
+		return r.admin.run(ctx, c)
 	}
 	sudo, err := r.sudo.forRoot(ctx)
 	if err != nil {
@@ -243,24 +268,15 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	cmd.Cancel = func() error { return interrupt(cmd.Process) }
 	cmd.WaitDelay = 10 * time.Second
 
-	var stdout, stderr bytes.Buffer
-	combined := &lockedBuffer{}
-	var streams []*lineWriter
+	var out *output
 	if term != nil {
+		out = &output{}
 		cmd.Stdin = term.stdin
 		cmd.Stdout = term.stdout
-		cmd.Stderr = multiWriter(term.stderr, &stderr, combined)
+		cmd.Stderr = multiWriter(term.stderr, &out.stderr, &out.combined)
 	} else {
-		outs := []io.Writer{&stdout, combined}
-		errs := []io.Writer{&stderr, combined}
-		if r.opts.Verbose != nil {
-			r.verbose([]byte("$ " + line + "\n"))
-			streams = []*lineWriter{{write: r.verbose}, {write: r.verbose}}
-			outs = append(outs, streams[0])
-			errs = append(errs, streams[1])
-		}
-		cmd.Stdout = multiWriter(outs...)
-		cmd.Stderr = multiWriter(errs...)
+		out = r.newOutput(line, c.Stream)
+		cmd.Stdout, cmd.Stderr = out.writers()
 	}
 
 	start := time.Now()
@@ -268,10 +284,8 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	if err == nil {
 		err = cmd.Run()
 	}
-	for _, s := range streams {
-		s.flush()
-	}
-	res := Result{ExitCode: -1, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	out.flush()
+	res := Result{ExitCode: -1, Stdout: out.stdout.Bytes(), Stderr: out.stderr.Bytes()}
 	if cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()
 	}
@@ -280,13 +294,7 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	switch {
 	case cmd.ProcessState == nil:
 		outcome = "didn't start: " + err.Error()
-		if pe, ok := errors.AsType[*fs.PathError](err); ok && pe.Op == "chdir" {
-			err = fmt.Errorf("%s: %w", c.what(), err)
-		} else if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
-			err = fmt.Errorf("%s: %s isn't installed: %w", c.what(), c.Name, err)
-		} else {
-			err = fmt.Errorf("%s: %w", c.what(), err)
-		}
+		err = startError(c, err)
 	case ctx.Err() != nil:
 		outcome = fmt.Sprintf("stopped (%v), exit code %d", ctx.Err(), res.ExitCode)
 		err = fmt.Errorf("%s: %w", c.what(), ctx.Err())
@@ -294,8 +302,87 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 		outcome = fmt.Sprintf("exit code %d", res.ExitCode)
 		err = CheckExit(c, res)
 	}
-	r.logCommand(start, line, combined.Bytes(), outcome)
+	r.logCommand(start, line, out.combined.Bytes(), outcome)
 	return res, err
+}
+
+// startError returns the error for the command c, which didn't start
+// because of err.
+func startError(c Cmd, err error) error {
+	switch {
+	case isChdir(err):
+		return fmt.Errorf("%s: %w", c.what(), err)
+	case notInstalled(err):
+		return fmt.Errorf("%s: %s isn't installed: %w", c.what(), c.Name, err)
+	default:
+		return fmt.Errorf("%s: %w", c.what(), err)
+	}
+}
+
+// isChdir reports whether err is checkDir's, for a working directory that
+// can't be found.
+func isChdir(err error) bool {
+	pe, ok := errors.AsType[*fs.PathError](err)
+	return ok && pe.Op == "chdir"
+}
+
+// notInstalled reports whether err, from starting a command, means the
+// program isn't installed.
+func notInstalled(err error) bool {
+	return !isChdir(err) && (errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist))
+}
+
+// output collects a command's output: its output and error output each on
+// their own, both together for the log, and, with Verbose, both a line at
+// a time to the Verbose writer.
+type output struct {
+	stdout, stderr bytes.Buffer
+	combined       lockedBuffer
+	streams        []*lineWriter
+}
+
+// newOutput returns where the output of the command line goes. With
+// Verbose, it writes the command line there first.
+func (r *ExecRunner) newOutput(line string, stream io.Writer) *output {
+	out := &output{}
+	// Where the output also goes as it runs, a line at a time: the
+	// command's Stream, or with Verbose, there. Not both, which would show
+	// it twice.
+	var watch func([]byte)
+	if r.opts.Verbose != nil {
+		r.verbose([]byte("$ " + line + "\n"))
+		watch = r.verbose
+	}
+	if stream != nil {
+		var mu sync.Mutex
+		watch = func(p []byte) {
+			mu.Lock()
+			defer mu.Unlock()
+			_, _ = stream.Write(p)
+		}
+	}
+	if watch != nil {
+		out.streams = []*lineWriter{{write: watch}, {write: watch}}
+	}
+	return out
+}
+
+// writers returns the writers for the command's output and error output.
+func (o *output) writers() (stdout, stderr io.Writer) {
+	outs := []io.Writer{&o.stdout, &o.combined}
+	errs := []io.Writer{&o.stderr, &o.combined}
+	if o.streams != nil {
+		outs = append(outs, o.streams[0])
+		errs = append(errs, o.streams[1])
+	}
+	return multiWriter(outs...), multiWriter(errs...)
+}
+
+// flush writes the last line of what's streamed, if it has no newline.
+func (o *output) flush() {
+	for _, s := range o.streams {
+		s.flush()
+	}
 }
 
 // checkDir returns an error with Op "chdir" if dir isn't empty and can't be

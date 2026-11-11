@@ -53,6 +53,22 @@ jobs:
       - name: Lint shell scripts and workflows
         run: make lint-shell lint-workflows
 
+  # PSScriptAnalyzer on install.ps1, in the Windows PowerShell 5.1 a fresh
+  # Windows 11 has, with the settings in PSScriptAnalyzerSettings.psd1, which
+  # also check that the script works in Windows PowerShell 5.1.
+  lint-powershell:
+    runs-on: windows-latest
+    env:
+      PSSCRIPTANALYZER_VERSION: 1.25.0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint install.ps1
+        shell: powershell
+        run: |
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force
+          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION
+          Invoke-ScriptAnalyzer -Path install.ps1 -Settings ./PSScriptAnalyzerSettings.psd1 -ReportSummary -EnableExit
+
   test:
     name: test (${{ matrix.os }})
     strategy:
@@ -72,6 +88,8 @@ jobs:
       - name: Test (with race detector)
         if: runner.os == 'Linux'
         run: go test -race ./...
+      # On Windows, this includes install.ps1's tests (test/install), which
+      # run it with Windows PowerShell.
       - name: Test
         if: runner.os != 'Linux'
         run: go test ./...
@@ -148,6 +166,111 @@ jobs:
         env:
           DISTRO: ${{ matrix.distro }}
           PODMAN: sudo podman
+
+  # The Windows integration test (test/windows) on a hosted windows-2025
+  # runner, which has WSL 2: maisys.exe, installed with install.ps1, syncs a
+  # Windows host from the fixture, creating a distro from the matrix's image
+  # (plus one whose first sync fails, which mustn't stop it) and setting it
+  # up with the Linux maisys of the same snapshot, which it finds through
+  # MAISYS_RELEASE_URL. The runner is Windows Server, WSL is installed
+  # already and jobs run as an admin, so WSL's install-and-reboot path, the
+  # UAC prompt and Windows Terminal are left to the Windows 11 VM test.
+  windows-wsl:
+    name: windows-wsl (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [FedoraLinux-44, Ubuntu-26.04]
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # maisys.exe and the Linux maisys handed to new distros must be the
+      # same version: both come from this snapshot, in dist/.
+      - name: Build a snapshot release
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+      # Windows can't overwrite a running .exe, so self-update moves it
+      # aside to maisys.exe.old, which the next run deletes. An older build
+      # updates itself to the snapshot; maisys isn't set up yet, so the
+      # sync then fails, which is fine.
+      - name: Self-update to the snapshot
+        shell: pwsh
+        run: |
+          $version = (Get-Content dist/metadata.json -Raw | ConvertFrom-Json).version
+          "snapshot version: $version"
+          go build -o old/maisys.exe -ldflags "-X github.com/plombardi89/maisys2/internal/buildinfo.version=0.0.0-0" ./cmd/maisys
+          $env:MAISYS_RELEASE_URL = 'file:///' + ((Resolve-Path dist).Path -replace '\\', '/')
+          $log = & ./old/maisys.exe sync --dry-run 2>&1 | Out-String
+          $log
+          if (-not $log.Contains("updated from 0.0.0-0 to $version;")) { throw 'maisys did not update itself to the snapshot' }
+          if (-not (Test-Path old/maisys.exe.old)) { throw 'the running maisys.exe was not moved aside to maisys.exe.old' }
+          $out = & ./old/maisys.exe --version | Out-String
+          $out
+          if (-not $out.Contains("maisys $version ")) { throw 'old/maisys.exe is not the snapshot' }
+          if (Test-Path old/maisys.exe.old) { throw 'the next run did not delete maisys.exe.old' }
+      # install.ps1 without a config URL only installs maisys, into
+      # %LOCALAPPDATA%\Programs\maisys. Until it exists, the snapshot's
+      # binary goes there directly.
+      - name: Install maisys
+        shell: pwsh
+        run: |
+          $env:MAISYS_RELEASE_URL = 'file:///' + ((Resolve-Path dist).Path -replace '\\', '/')
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\maisys'
+          if (Test-Path install.ps1) {
+            & ./install.ps1
+          } else {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            $zip = Get-ChildItem dist -Filter 'maisys_*_windows_amd64.zip' | Select-Object -First 1
+            Expand-Archive -Path $zip.FullName -DestinationPath $dir -Force
+          }
+          & (Join-Path $dir 'maisys.exe') --version
+      # WSL downloads images from the list in its GitHub repo. The test
+      # points WSL at a list of its own instead (the DistributionListUrl
+      # value in HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss), with
+      # the image saved in the Actions cache under its sha256, so each
+      # image is only downloaded when it changes.
+      - name: Find the ${{ matrix.image }} image
+        id: image
+        shell: pwsh
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          $list = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/microsoft/WSL/master/distributions/DistributionInfo.json'
+          $entry = $list.ModernDistributions.PSObject.Properties.Value | ForEach-Object { $_ } | Where-Object { $_.Name -eq $env:IMAGE } | Select-Object -First 1
+          if (-not $entry) { throw "WSL's list of distros has no $env:IMAGE" }
+          $sha256 = ($entry.Amd64Url.Sha256 -replace '^0x', '').ToLower()
+          "$env:IMAGE is $($entry.Amd64Url.Url), sha256 $sha256"
+          "url=$($entry.Amd64Url.Url)" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "sha256=$sha256" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+      - name: Cache the image
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\wsl-images
+          key: wsl-image-${{ matrix.image }}-${{ steps.image.outputs.sha256 }}
+      - name: Run the Windows integration test
+        shell: pwsh
+        run: go test -count=1 -v -timeout 80m -run '^TestWSLHost$' ./test/windows
+        env:
+          MAISYS_WINDOWS_E2E: "1"
+          MAISYS_WSL_IMAGE: ${{ matrix.image }}
+          MAISYS_WSL_IMAGE_URL: ${{ steps.image.outputs.url }}
+          MAISYS_WSL_IMAGE_SHA256: ${{ steps.image.outputs.sha256 }}
+          MAISYS_WSL_IMAGE_DIR: ${{ runner.temp }}\wsl-images
+      - name: Keep maisys's logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-wsl-logs-${{ matrix.image }}
+          path: ~/AppData/Local/maisys/logs
+          if-no-files-found: ignore
 
   # The private config repo sign-in test (test/signin): maisys clones a
   # private copy of the fixture over HTTPS, with the token in

@@ -1,7 +1,9 @@
 // Package facts detects details of the system maisys is running on: the
 // operating system and its version, the CPU architecture, the hostname,
-// whether it's a WSL distro, and whether maisys runs as root. It also holds
-// the rolling support policy, and checks a machine against the live system.
+// whether it's a WSL distro, and whether maisys runs as root; and on a
+// Windows host, what WSL 2 needs and the WSL distros registered there. It
+// also holds the rolling support policy, and checks a machine against the
+// live system.
 package facts
 
 import (
@@ -45,6 +47,10 @@ type System struct {
 	// Root reports whether maisys is running as root (effective user ID
 	// 0). It's always false on Windows.
 	Root bool
+	// Windows holds a Windows host's details, once they're detected with
+	// DetectWindows, which sync does before it plans. It's nil until then,
+	// and on Linux.
+	Windows *Windows
 }
 
 // Detect detects the system maisys is running on.

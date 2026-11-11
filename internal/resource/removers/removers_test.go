@@ -17,9 +17,12 @@ import (
 	"github.com/plombardi89/maisys2/internal/resource/removers"
 	"github.com/plombardi89/maisys2/internal/resource/repo"
 	"github.com/plombardi89/maisys2/internal/resource/sudoers"
+	"github.com/plombardi89/maisys2/internal/resource/terminal"
 	"github.com/plombardi89/maisys2/internal/resource/tool"
 	"github.com/plombardi89/maisys2/internal/resource/unit"
 	"github.com/plombardi89/maisys2/internal/resource/uvtool"
+	"github.com/plombardi89/maisys2/internal/resource/winget"
+	"github.com/plombardi89/maisys2/internal/resource/wsl"
 )
 
 // TestEveryKindHasARemover checks that a record of every resource kind can
@@ -31,6 +34,8 @@ func TestEveryKindHasARemover(t *testing.T) {
 		pkg.Kind, repo.Kind, repo.ArchKind, tool.Kind, file.Kind, link.Kind,
 		gitconfig.Kind, unit.Kind, loginshell.Kind, checkout.Kind,
 		installer.Kind, goinstall.Kind, uvtool.Kind, sudoers.Kind, cleanup.Kind,
+		winget.Kind,
+		wsl.Kind, wsl.DistroKind, wsl.DefaultKind, terminal.Kind,
 	}
 	got := slices.Sorted(maps.Keys(removers.All()))
 	slices.Sort(kinds)

@@ -3,7 +3,7 @@
 maisys sets up and maintains development machines from a config repo that you keep in git. It runs on Fedora and Ubuntu, and on Windows 11 it installs WSL and sets up WSL distros.
 
 > [!NOTE]
-> maisys is in early development. It can create, check and sync a config repo, and `maisys sync` plans and applies changes, but no module installs anything yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
+> maisys is in early development, and not released with all of this yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
 
 ## Installing
 
@@ -16,6 +16,14 @@ curl -fsSL https://github.com/plombardi89/maisys2/releases/latest/download/insta
 This installs `maisys` to `~/.local/bin` and runs `maisys sync CONFIG-URL`. Leave out `CONFIG-URL` to install without syncing. Any other arguments are passed to `maisys sync`.
 
 To remove maisys itself (the binary, settings, state and caches), run the same command with `--uninstall` in place of `CONFIG-URL`. Tools, files and packages that maisys installed are left in place.
+
+On Windows 11 (amd64), in PowerShell as your normal user:
+
+```powershell
+iex "& { $(irm https://github.com/plombardi89/maisys2/releases/latest/download/install.ps1) } CONFIG-URL"
+```
+
+This installs `maisys.exe` to `%LOCALAPPDATA%\Programs\maisys`, adds it to your user PATH, and runs `maisys sync CONFIG-URL`. On Windows, maisys installs and updates WSL, writes `.wslconfig`, creates the WSL distros your config lists and sets each one up with its own Linux machine file, installs packages with winget, and makes the default distro Windows Terminal's default profile. Steps that need admin rights run together, after one UAC prompt. If WSL needs a restart, maisys says so and exits with code 3: restart, then run `maisys sync` again. To remove maisys, use `-Uninstall` in place of `CONFIG-URL`.
 
 ## Your config repo
 
