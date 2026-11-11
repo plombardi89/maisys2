@@ -16,8 +16,9 @@ func interrupt(p *os.Process) error {
 
 // procAttr returns how to start a command. One that isn't interactive
 // starts a new process group, which Windows starts with Ctrl-C turned off,
-// so a Ctrl-C in the console doesn't reach it.
-func procAttr(interactive bool) *syscall.SysProcAttr {
+// so a Ctrl-C in the console doesn't reach it. Windows has no sudo, so
+// whether the command runs it makes no difference.
+func procAttr(interactive, _ bool) *syscall.SysProcAttr {
 	if interactive {
 		return nil
 	}

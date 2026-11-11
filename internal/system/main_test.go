@@ -52,8 +52,13 @@ func helperCmd(t *testing.T, args ...string) Cmd {
 //   - pwd prints the working directory
 //   - cat copies its input to its output
 //   - sleep sleeps for a minute
-//   - group prints "own" if it runs in a process group of its own, and
-//     "parent" if it runs in its parent's (see processGroup)
+//   - group prints the process group and the session it runs in, as
+//     GROUP/SESSION: each "own" if it leads one of its own, and "parent"
+//     if it runs in its parent's (see processGroup and processSession)
+//   - tty asks a question on the terminal, /dev/tty, as ssh asks about a
+//     host key it doesn't know, and exits with 3 if it can't open it
+//   - run ARGS... runs the helper with ARGS as maisys runs a command, and
+//     prints its exit code and error
 func helper(args []string) int {
 	switch args[0] {
 	case "exit":
@@ -79,7 +84,32 @@ func helper(args []string) int {
 	case "sleep":
 		time.Sleep(time.Minute)
 	case "group":
-		fmt.Println(processGroup())
+		fmt.Println(processGroup() + "/" + processSession())
+	case "tty":
+		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 3
+		}
+		_, err = fmt.Fprint(tty, "Are you sure you want to continue connecting (yes/no/[fingerprint])? ")
+		if err == nil {
+			_, err = bufio.NewReader(tty).ReadString('\n')
+		}
+		if cerr := tty.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return 99
+		}
+	case "run":
+		exe, err := os.Executable()
+		if err != nil {
+			return 99
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res, err := NewRunner(Options{}).Run(ctx, Cmd{Name: exe, Args: args[1:]})
+		fmt.Printf("exit code %d: %v\n", res.ExitCode, err)
 	default:
 		return 99
 	}
@@ -89,9 +119,9 @@ func helper(args []string) int {
 // fakeSudo acts as sudo, the way the FAKE_SUDO_MODE environment variable
 // says, and appends its arguments as a JSON array to the file named by
 // FAKE_SUDO_LOG. If FAKE_SUDO_GROUPS names a file, it also appends its
-// arguments and process group (see processGroup) there, as a line of
-// "ARGS: GROUP". FAKE_SUDO_IMPL says which sudo it acts as: "sudo", or
-// "sudo-rs", whose messages differ. The modes are:
+// arguments, process group and session (see helper's group) there, as a
+// line of "ARGS: GROUP/SESSION". FAKE_SUDO_IMPL says which sudo it acts
+// as: "sudo", or "sudo-rs", whose messages differ. The modes are:
 //   - nopasswd: sudo works without a password
 //   - password: sudo needs the password "secret", unless the file named by
 //     FAKE_SUDO_STAMP exists; reading the password creates it
@@ -110,7 +140,7 @@ func fakeSudo(args []string) int {
 	}
 	if name := os.Getenv("FAKE_SUDO_GROUPS"); name != "" {
 		if f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
-			_, _ = fmt.Fprintf(f, "%s: %s\n", strings.Join(args, " "), processGroup())
+			_, _ = fmt.Fprintf(f, "%s: %s/%s\n", strings.Join(args, " "), processGroup(), processSession())
 			_ = f.Close()
 		}
 	}

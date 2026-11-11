@@ -171,12 +171,12 @@ func (r *ExecRunner) StartSudo(ctx context.Context) error {
 	// it only doesn't if every rule for the user is NOPASSWD, and a user in
 	// the wheel or sudo group has that group's rule too. sudo -n -v then
 	// only refreshes a password typed a while ago.
-	res, err := r.run(ctx, Cmd{Name: path, Args: []string{"-n", "true"}, Label: "sudo -n true", AllowExit: []int{1}}, nil)
+	res, err := r.run(ctx, Cmd{Name: path, Args: []string{"-n", "true"}, Label: "sudo -n true", AllowExit: []int{1}, sudo: true}, nil)
 	if err == nil && res.ExitCode == 0 {
-		_, _ = r.run(ctx, Cmd{Name: path, Args: []string{"-n", "-v"}, Label: "sudo -n -v"}, nil)
+		_, _ = r.run(ctx, Cmd{Name: path, Args: []string{"-n", "-v"}, Label: "sudo -n -v", sudo: true}, nil)
 	} else {
 		term := &terminal{stdin: opts.Stdin, stdout: opts.Stdout, stderr: opts.Stderr}
-		res, err = r.run(ctx, Cmd{Name: path, Args: []string{"-v"}, Label: "sudo -v", Interactive: true}, term)
+		res, err = r.run(ctx, Cmd{Name: path, Args: []string{"-v"}, Label: "sudo -v", Interactive: true, sudo: true}, term)
 		if err != nil {
 			if _, ok := errors.AsType[*ExitError](err); !ok {
 				return fmt.Errorf("couldn't start sudo: %w", err)
@@ -231,7 +231,7 @@ func (s *sudoSession) keepAlive(ctx context.Context, sudo string, interval time.
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_, _ = s.r.run(ctx, Cmd{Name: sudo, Args: []string{"-n", "-v"}, Label: "sudo -n -v"}, nil)
+			_, _ = s.r.run(ctx, Cmd{Name: sudo, Args: []string{"-n", "-v"}, Label: "sudo -n -v", sudo: true}, nil)
 		}
 	}
 }
@@ -294,7 +294,7 @@ func (s *sudoSession) probe(ctx context.Context) (SudoStatus, error) {
 	if err != nil {
 		return SudoMissing, s.sudoError(SudoMissing, "")
 	}
-	res, err := s.r.run(ctx, Cmd{Name: path, Args: []string{"-n", "true"}, Label: "sudo -n true", AllowExit: []int{1}}, nil)
+	res, err := s.r.run(ctx, Cmd{Name: path, Args: []string{"-n", "true"}, Label: "sudo -n true", AllowExit: []int{1}, sudo: true}, nil)
 	if err != nil {
 		return "", fmt.Errorf("couldn't check whether sudo works: %w", err)
 	}
@@ -311,7 +311,7 @@ func (s *sudoSession) probe(ctx context.Context) (SudoStatus, error) {
 
 	// sudo asks for a password before it says whether the user may use it
 	// at all, but listing what they may run sometimes says so without one.
-	res, err = s.r.run(ctx, Cmd{Name: path, Args: []string{"-n", "-l"}, Label: "sudo -n -l", AllowExit: []int{1}}, nil)
+	res, err = s.r.run(ctx, Cmd{Name: path, Args: []string{"-n", "-l"}, Label: "sudo -n -l", AllowExit: []int{1}, sudo: true}, nil)
 	if err != nil {
 		return "", fmt.Errorf("couldn't check whether sudo works: %w", err)
 	}

@@ -306,7 +306,8 @@ func TestStartSudoWithoutPassword(t *testing.T) {
 
 // TestSudoInForeground checks that sudo -v, which may ask for a password,
 // runs where the terminal's Ctrl-C reaches it, and that commands run as
-// root and the session's refreshes don't.
+// root and the session's checks and refreshes don't, but still run in
+// maisys's session, which sudo's record of a typed password depends on.
 func TestSudoInForeground(t *testing.T) {
 	sudo := useFakeSudo(t, "sudo", "password")
 	groups := filepath.Join(t.TempDir(), "groups")
@@ -327,11 +328,11 @@ func TestSudoInForeground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"-v": "parent", "-n -- env LC_ALL=C true": "own", "-n -v": "own"}
+	want := map[string]string{"-n true": "own/parent", "-v": "parent/parent", "-n -- env LC_ALL=C true": "own/parent", "-n -v": "own/parent"}
 	for line := range strings.Lines(string(data)) {
 		args, group, _ := strings.Cut(strings.TrimSpace(line), ": ")
 		if w, ok := want[args]; ok && group != w {
-			t.Errorf("sudo %s ran in process group %q, want %q", args, group, w)
+			t.Errorf("sudo %s ran in process group and session %q, want %q", args, group, w)
 		}
 		delete(want, args)
 	}

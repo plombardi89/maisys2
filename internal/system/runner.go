@@ -36,6 +36,9 @@ type Cmd struct {
 	Stdin io.Reader
 	// Root runs the command as root, with sudo -n. Only Linux has it.
 	Root bool
+	// sudo marks a command that runs sudo, which keeps maisys's terminal
+	// (see procAttr).
+	sudo bool
 	// Label says what the command does in a few words, such as
 	// "dnf install", for errors. Empty means the command line.
 	Label string
@@ -45,10 +48,11 @@ type Cmd struct {
 	// Interactive runs the command where the terminal's Ctrl-C reaches it,
 	// as it reaches maisys. Only a command that may ask you something
 	// needs it, such as sudo -v asking for your password. Other commands
-	// run in a process group of their own (on Windows, without Ctrl-C), so
-	// that after a Ctrl-C the step in progress can finish: maisys stops
-	// them itself when their context is cancelled. They mustn't read from
-	// the terminal.
+	// run without the terminal, in a session of their own (on Windows, in
+	// a process group without Ctrl-C), so that after a Ctrl-C the step in
+	// progress can finish: maisys stops them, and what they started, when
+	// their context is cancelled. One that tries to ask something anyway,
+	// as ssh does about a host key it doesn't know, fails at once.
 	Interactive bool
 }
 
@@ -216,7 +220,7 @@ func (c Cmd) viaSudo(sudo string) Cmd {
 	args = append(args, c.Name)
 	args = append(args, c.Args...)
 	c.Label = c.what()
-	c.Name, c.Args, c.Env, c.Root = sudo, args, nil, false
+	c.Name, c.Args, c.Env, c.Root, c.sudo = sudo, args, nil, false, true
 	return c
 }
 
@@ -235,7 +239,7 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, term *terminal) (Result, er
 	cmd.Dir = c.Dir
 	cmd.Env = append(append(os.Environ(), "LC_ALL=C"), c.Env...)
 	cmd.Stdin = c.Stdin
-	cmd.SysProcAttr = procAttr(c.Interactive)
+	cmd.SysProcAttr = procAttr(c.Interactive, c.sudo)
 	cmd.Cancel = func() error { return interrupt(cmd.Process) }
 	cmd.WaitDelay = 10 * time.Second
 
