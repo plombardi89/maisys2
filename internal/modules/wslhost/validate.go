@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/plombardi89/maisys2/internal/config"
+	"github.com/plombardi89/maisys2/internal/gitrepo"
 )
 
 var (
@@ -22,9 +23,6 @@ var (
 	imagePattern = regexp.MustCompile(`^(FedoraLinux|Ubuntu)-([0-9][0-9.]*)$`)
 	// userPattern matches valid Linux user names.
 	userPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
-	// scpURL matches git's scp-like SSH URLs, such as
-	// "git@github.com:owner/repo.git".
-	scpURL = regexp.MustCompile(`^[^/@:]+@[^/:]+:`)
 )
 
 // imageOS maps the distro part of an image name to the os it installs.
@@ -39,21 +37,27 @@ func ValidUser(name string) bool {
 	return name != "root" && userPattern.MatchString(name)
 }
 
-// HTTPSURL returns the HTTPS URL of the repo at sshURL, a git SSH URL, on
-// hosts that serve repos at the same path over both, as GitHub, GitLab and
-// Bitbucket do: for example https://github.com/owner/repo.git for
-// git@github.com:owner/repo.git. It returns "" if sshURL isn't an SSH URL
+// HTTPSURL returns the HTTPS URL of the repo at sshURL, a git SSH URL (see
+// gitrepo.IsSSH), on hosts that serve repos at the same path over both, as
+// GitHub, GitLab and Bitbucket do: for example
+// https://github.com/owner/repo.git for git@github.com:owner/repo.git. It
+// drops the user and the port. It returns "" if sshURL isn't an SSH URL
 // with a host and a path.
 func HTTPSURL(sshURL string) string {
-	if !isSSH(sshURL) {
+	if !gitrepo.IsSSH(sshURL) {
 		return ""
 	}
 	var host, repoPath string
-	if prefix := scpURL.FindString(sshURL); prefix != "" {
-		_, host, _ = strings.Cut(strings.TrimSuffix(prefix, ":"), "@")
-		repoPath = sshURL[len(prefix):]
-	} else if u, err := url.Parse(sshURL); err == nil {
+	if strings.Contains(sshURL, "://") {
+		u, err := url.Parse(sshURL)
+		if err != nil {
+			return ""
+		}
 		host, repoPath = u.Hostname(), u.Path
+	} else {
+		// [user@]host:path
+		host, repoPath, _ = strings.Cut(sshURL, ":")
+		host = host[strings.LastIndexByte(host, '@')+1:]
 	}
 	repoPath = strings.TrimPrefix(repoPath, "/")
 	if host == "" || repoPath == "" {
@@ -70,12 +74,16 @@ func (c *Config) Check(check *config.Check) {
 			check.Errorf("default_distro", "is %q, which isn't one of wsl_host.distros", c.DefaultDistro)
 		}
 	}
-	switch {
-	case c.ConfigURL != "" && !strings.HasPrefix(strings.ToLower(c.ConfigURL), "https://"):
-		check.Errorf("config_url", "must be an HTTPS URL, not %q", c.ConfigURL)
-	case c.ConfigURL == "" && len(c.Distros) > 0 && isSSH(check.Repo.URL):
-		check.Errorf("config_url", "is required, because this machine clones the config repo over SSH (%s), and new distros clone it over HTTPS", check.Repo.URL)
+	// New distros clone config_url, or else this machine's config URL, over
+	// HTTPS. That URL may not be known: then there's nothing to check.
+	switch repoURL := check.Repo.URL; {
+	case c.ConfigURL != "" && !gitrepo.IsHTTPS(c.ConfigURL):
+		check.Errorf("config_url", "must be an HTTPS URL, not %q", gitrepo.Redact(c.ConfigURL))
+	case c.ConfigURL != "" || len(c.Distros) == 0 || repoURL == "" || gitrepo.IsHTTPS(repoURL):
+	case gitrepo.IsSSH(repoURL):
+		check.Errorf("config_url", "is required, because this machine clones the config repo over SSH (%s), and new distros clone it over HTTPS", gitrepo.Redact(repoURL))
 	default:
+		check.Errorf("config_url", "is required, because this machine clones the config repo from %s, which isn't an HTTPS URL, and new distros clone it over HTTPS", gitrepo.Redact(repoURL))
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Distros)) {
 		checkDistro(check, name, c.Distros[name])
@@ -144,17 +152,6 @@ func imageName(osName config.OS, version string) string {
 		}
 	}
 	return ""
-}
-
-// isSSH reports whether url is a git SSH URL.
-func isSSH(url string) bool {
-	lower := strings.ToLower(url)
-	for _, scheme := range []string{"ssh://", "git+ssh://", "ssh+git://"} {
-		if strings.HasPrefix(lower, scheme) {
-			return true
-		}
-	}
-	return scpURL.MatchString(url)
 }
 
 // Targets returns .wslconfig, which wsl_host writes.

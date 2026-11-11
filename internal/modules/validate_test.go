@@ -1,6 +1,7 @@
 package modules_test
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"slices"
@@ -544,7 +545,7 @@ os = "windows"
 enabled = true
 distros.dev = { image = "FedoraLinux-44", machine = "fedora-dev", user = "phil" }
 `,
-			want: []string{"machines/box.toml:3:2: wsl_host.config_url is required, because this machine clones the config repo over SSH (ssh://git@example.com/me/config.git), and new distros clone it over HTTPS"},
+			want: []string{"machines/box.toml:3:2: wsl_host.config_url is required, because this machine clones the config repo over SSH (ssh://xxxxx@example.com/me/config.git), and new distros clone it over HTTPS"},
 		},
 		{
 			name: "wsl_host: no config_url when the host clones over HTTPS",
@@ -702,6 +703,65 @@ items.wslconfig = { source = "files/gitconfig.tmpl", target = "~/.wslconfig" }
 			}
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("errors:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+}
+
+// TestWSLHostConfigURL checks wsl_host.config_url against the config repo's
+// URL: new distros clone config_url if it's set, and the config repo's own
+// URL otherwise, over HTTPS.
+func TestWSLHostConfigURL(t *testing.T) {
+	const (
+		required = "machines/box.toml:3:2: wsl_host.config_url is required, because this machine clones the config repo "
+		notHTTPS = "machines/box.toml:5:14: wsl_host.config_url must be an HTTPS URL, not "
+		overHTTP = ", and new distros clone it over HTTPS"
+	)
+	tests := []struct {
+		name      string
+		configURL string
+		url       string // the config repo's URL
+		noDistros bool
+		want      string // the error, if any
+	}{
+		{name: "config_url, and an SSH URL", configURL: "https://github.com/me/config.git", url: "git@github.com:me/config.git"},
+		{name: "config_url, and no URL", configURL: "https://github.com/me/config.git"},
+		{name: "config_url over SSH", configURL: "git@github.com:me/config.git", want: notHTTPS + `"git@github.com:me/config.git"`},
+		{name: "config_url without a host", configURL: "https://", want: notHTTPS + `"https://"`},
+		{name: "config_url over HTTP", configURL: "http://me:s3cret@example.com/config.git", want: notHTTPS + `"http://xxxxx@example.com/config.git"`},
+		{name: "config_url is a folder", configURL: `C:\config.git`, want: notHTTPS + `"C:\\config.git"`},
+
+		{name: "an HTTPS URL", url: "https://me@example.com:8443/me/config.git"},
+		{name: "no URL"},
+		{name: "a folder, and no distros", url: "/srv/git/config.git", noDistros: true},
+		{name: "an SSH URL", url: "git@github.com:me/config.git", want: required + "over SSH (git@github.com:me/config.git)" + overHTTP},
+		{name: "an SSH URL with an alias", url: "github-work:org/config.git", want: required + "over SSH (github-work:org/config.git)" + overHTTP},
+		{name: "an ssh:// URL", url: "ssh://git@example.com:2222/me/config.git", want: required + "over SSH (ssh://xxxxx@example.com:2222/me/config.git)" + overHTTP},
+		{name: "an HTTP URL", url: "http://me:s3cret@example.com/config.git", want: required + "from http://xxxxx@example.com/config.git, which isn't an HTTPS URL" + overHTTP},
+		{name: "an HTTPS URL without a host", url: "https:///config.git", want: required + "from https:///config.git, which isn't an HTTPS URL" + overHTTP},
+		{name: "a file URL", url: "file:///srv/git/config.git", want: required + "from file:///srv/git/config.git, which isn't an HTTPS URL" + overHTTP},
+		{name: "a folder", url: "/srv/git/config.git", want: required + "from /srv/git/config.git, which isn't an HTTPS URL" + overHTTP},
+		{name: "a Windows folder", url: `C:\Users\me\config.git`, want: required + `from C:\Users\me\config.git, which isn't an HTTPS URL` + overHTTP},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			machine := "os = \"windows\"\n\n[wsl_host]\nenabled = true\n"
+			if tt.configURL != "" {
+				machine += fmt.Sprintf("config_url = %q\n", tt.configURL)
+			}
+			if !tt.noDistros {
+				machine += `distros.dev = { image = "FedoraLinux-44", machine = "fedora-dev", user = "phil" }` + "\n"
+			}
+			files := maps.Clone(ruleRepo)
+			files["machines/box.toml"] = &fstest.MapFile{Data: []byte(machine)}
+			repo := &config.Repo{FS: files, Modules: modules.All(), URL: tt.url}
+			_, err := repo.Validate("box")
+			var got string
+			if err != nil {
+				got = err.Error()
+			}
+			if got != tt.want {
+				t.Errorf("errors:\n%s\nwant:\n%s", got, tt.want)
 			}
 		})
 	}

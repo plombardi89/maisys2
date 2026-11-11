@@ -885,21 +885,33 @@ func TestURLKinds(t *testing.T) {
 		redacted   string
 	}{
 		{"https://github.com/me/config.git", true, false, "https://github.com/me/config.git"},
+		{"HTTPS://GitHub.com/me/config.git", true, false, "HTTPS://GitHub.com/me/config.git"},
 		{"https://me:ghp_secret@github.com/me/config.git", true, false, "https://xxxxx@github.com/me/config.git"},
 		{"https://ghp_secret@github.com/me/config.git", true, false, "https://xxxxx@github.com/me/config.git"},
+		{"https://", false, false, "https://"},
+		{"https:///me/config.git", false, false, "https:///me/config.git"},
 		{"http://example.com/config.git", false, false, "http://example.com/config.git"},
+		{"http://me:s3cret@example.com/config.git", false, false, "http://xxxxx@example.com/config.git"},
 		{"git@github.com:me/config.git", false, true, "git@github.com:me/config.git"},
+		{"github-work:org/config.git", false, true, "github-work:org/config.git"},
 		{"ssh://git@github.com/me/config.git", false, true, "ssh://xxxxx@github.com/me/config.git"},
+		{"ssh://example.com:2222/me/config.git", false, true, "ssh://example.com:2222/me/config.git"},
+		{"git+ssh://example.com/me/config.git", false, true, "git+ssh://example.com/me/config.git"},
+		{"ssh+git://example.com/me/config.git", false, true, "ssh+git://example.com/me/config.git"},
 		{"/home/me/config.git", false, false, "/home/me/config.git"},
+		{"./a:b", false, false, "./a:b"},
+		{"config.git", false, false, "config.git"},
 		{`C:\Users\me\config.git`, false, false, `C:\Users\me\config.git`},
+		{"C:/Users/me/config.git", false, false, "C:/Users/me/config.git"},
 		{"file:///home/me/config.git", false, false, "file:///home/me/config.git"},
+		{"", false, false, ""},
 	}
 	for _, tt := range tests {
-		if got := isHTTPS(tt.url); got != tt.https {
-			t.Errorf("isHTTPS(%q) = %v, want %v", tt.url, got, tt.https)
+		if got := IsHTTPS(tt.url); got != tt.https {
+			t.Errorf("IsHTTPS(%q) = %v, want %v", tt.url, got, tt.https)
 		}
-		if got := isSSH(tt.url); got != tt.ssh {
-			t.Errorf("isSSH(%q) = %v, want %v", tt.url, got, tt.ssh)
+		if got := IsSSH(tt.url); got != tt.ssh {
+			t.Errorf("IsSSH(%q) = %v, want %v", tt.url, got, tt.ssh)
 		}
 		if got := Redact(tt.url); got != tt.redacted {
 			t.Errorf("Redact(%q) = %q, want %q", tt.url, got, tt.redacted)

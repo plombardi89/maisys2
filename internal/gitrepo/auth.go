@@ -263,7 +263,7 @@ func tokenRejected(gitMessage, shown, what string) error {
 // couldn't sign in to it.
 func otherAuthError(rawURL string, ge *gitError) error {
 	fix := "Use the repo's HTTPS URL, or its SSH URL to sign in with your SSH key"
-	if isSSH(rawURL) {
+	if IsSSH(rawURL) {
 		fix = "Check that your SSH key is loaded (ssh-add -l lists them) and can read the repo, or use the repo's HTTPS URL"
 	}
 	return fmt.Errorf("%w to %s (%s).\n%s", ErrAuth, Redact(rawURL), ge.message(), fix)
@@ -279,7 +279,7 @@ func (r *Repo) pullAuthError(ctx context.Context, rawURL string, ge *gitError, w
 	switch {
 	case withToken:
 		fix = "The token in MAISYS_CONFIG_TOKEN was rejected: it may have expired, or it can't read the repo. Set it to a new read-only access token (" + tokenKind + ")."
-	case !isHTTPS(rawURL):
+	case !IsHTTPS(rawURL):
 		fix = "Check that your SSH key is loaded (ssh-add -l lists them) and can still read the repo."
 	default:
 		if file := r.credentialsFile(ctx); file != "" {
@@ -292,13 +292,16 @@ func (r *Repo) pullAuthError(ctx context.Context, rawURL string, ge *gitError, w
 		ErrAuth, Redact(rawURL), ge.message(), fix, localHint)
 }
 
-func isHTTPS(rawURL string) bool {
+// IsHTTPS reports whether rawURL is an https:// URL with a host.
+func IsHTTPS(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	return err == nil && strings.EqualFold(u.Scheme, "https") && u.Host != ""
 }
 
-// isSSH reports whether rawURL is an ssh:// URL or scp-like (host:path).
-func isSSH(rawURL string) bool {
+// IsSSH reports whether rawURL is a git SSH URL: an ssh:// URL, or an
+// scp-like one, [user@]host:path, where host may be an alias from the SSH
+// config. A path such as C:\config isn't one.
+func IsSSH(rawURL string) bool {
 	lower := strings.ToLower(rawURL)
 	for _, scheme := range []string{"ssh://", "git+ssh://", "ssh+git://"} {
 		if strings.HasPrefix(lower, scheme) {

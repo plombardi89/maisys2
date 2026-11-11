@@ -85,7 +85,7 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 		return nil, err
 	}
 
-	if isHTTPS(via) && opts.Auth.Token != "" {
+	if IsHTTPS(via) && opts.Auth.Token != "" {
 		c, err := opts.Auth.tokenCall(call{dir: outsideRepos(), args: args, progress: true})
 		if err != nil {
 			return nil, err
@@ -106,7 +106,7 @@ func Clone(ctx context.Context, url, dir string, opts Options) (*Repo, error) {
 	if !ok || !authFailed(ge.stderr) {
 		return nil, cloneError(shown, err, nil)
 	}
-	if !isHTTPS(via) {
+	if !IsHTTPS(via) {
 		return nil, otherAuthError(via, ge)
 	}
 	helper, err := opts.userConfig(ctx, "--get-urlmatch", "credential.helper", via)
@@ -303,7 +303,7 @@ func (r *Repo) Pull(ctx context.Context) error {
 	}
 
 	c := call{dir: r.Dir, args: append([]string{"pull", "--ff-only"}, r.progressFlag()...), progress: true}
-	withToken := isHTTPS(url) && r.Auth.Token != ""
+	withToken := IsHTTPS(url) && r.Auth.Token != ""
 	if withToken {
 		if c, err = r.Auth.tokenCall(c); err != nil {
 			return err
@@ -313,7 +313,7 @@ func (r *Repo) Pull(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
-	if ge, ok := errors.AsType[*gitError](err); ok && authFailed(ge.stderr) && !withToken && isHTTPS(url) && r.Auth.Prompt != nil {
+	if ge, ok := errors.AsType[*gitError](err); ok && authFailed(ge.stderr) && !withToken && IsHTTPS(url) && r.Auth.Prompt != nil {
 		if file := r.credentialsFile(ctx); file != "" {
 			return r.pullWithNewToken(ctx, url, file, c)
 		}
@@ -434,7 +434,7 @@ func (r *Repo) Push(ctx context.Context) error {
 	}
 
 	c := call{dir: r.Dir, args: append(append([]string{"push"}, r.progressFlag()...), "--set-upstream", "origin", "HEAD"), progress: true}
-	withToken := isHTTPS(url) && r.Auth.Token != ""
+	withToken := IsHTTPS(url) && r.Auth.Token != ""
 	if withToken {
 		if c, err = r.Auth.tokenCall(c); err != nil {
 			return err
