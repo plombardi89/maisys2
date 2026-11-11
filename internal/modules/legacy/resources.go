@@ -23,7 +23,10 @@ var protocReadme = []string{
 var goRoot = "/usr/local/go"
 
 // leftovers are what the Ansible setup left behind, in the order they're
-// deleted.
+// deleted. The mage and golangci-lint it installed with go install are left
+// alone: ~/go/bin is go install's folder, which the golang module manages,
+// and the versions the mage and golangci_lint modules link into
+// ~/.local/bin come before it on PATH.
 func leftovers() []*cleanup.Leftover {
 	return []*cleanup.Leftover{
 		{Path: goRoot, Root: true},
@@ -33,8 +36,6 @@ func leftovers() []*cleanup.Leftover {
 		{Path: "~/bin/lnav"},
 		{Path: "~/bin/protoc"},
 		{Path: "~/bin/mutagen"},
-		{Path: "~/go/bin/mage"},
-		{Path: "~/go/bin/golangci-lint"},
 		{Path: "~/include/google"},
 		{Path: "~/readme.txt", SHA256: protocReadme},
 		{Path: "~/Apps/idea"},
@@ -49,15 +50,15 @@ func leftovers() []*cleanup.Leftover {
 // so nothing is deleted before its replacement is in place.
 func (Module) DependsOn() []string {
 	return []string{
-		"shell", "golang", "mage", "golangci_lint", "kubectl", "stern", "yq",
-		"lnav", "protoc", "mutagen", "python_tools", "intellij",
+		"shell", "golang", "kubectl", "stern", "yq", "lnav", "protoc",
+		"mutagen", "python_tools", "intellij",
 	}
 }
 
-// Resources returns each thing the Ansible setup left behind. Those that
-// are there are listed in the plan, to be deleted once it's confirmed:
-// /usr/local/go as root, and the rest in your home folder. ~/readme.txt
-// is only deleted if it's protoc's readme.
+// Resources returns each thing the Ansible setup left behind that the
+// cleanup deletes. Those that are there are listed in the plan, to be
+// deleted once it's confirmed: /usr/local/go as root, and the rest in your
+// home folder. ~/readme.txt is only deleted if it's protoc's readme.
 func (Module) Resources(config.ModuleConfig, *resource.Runtime) ([]resource.Resource, error) {
 	var rs []resource.Resource
 	for _, l := range leftovers() {

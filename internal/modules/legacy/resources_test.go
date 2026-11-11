@@ -38,7 +38,7 @@ func TestResources(t *testing.T) {
 		want   []string
 	}{
 		{
-			name:   "everything",
+			name:   "everything, and go install's mage and golangci-lint, which are left alone",
 			goRoot: true,
 			files: map[string]string{
 				"bin/kubectl":                       "",
@@ -57,8 +57,7 @@ func TestResources(t *testing.T) {
 			},
 			want: []string{
 				"GOROOT", "~/bin/kubectl", "~/bin/stern", "~/bin/yq", "~/bin/lnav", "~/bin/protoc", "~/bin/mutagen",
-				"~/go/bin/mage", "~/go/bin/golangci-lint", "~/include/google", "~/readme.txt",
-				"~/Apps/idea", "~/Apps/idea.bak", "~/venv/maisys",
+				"~/include/google", "~/readme.txt", "~/Apps/idea", "~/Apps/idea.bak", "~/venv/maisys",
 			},
 		},
 		{
@@ -94,8 +93,8 @@ func TestResources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(rs) != 14 {
-				t.Errorf("%d resources, want one for each of the 14 leftovers", len(rs))
+			if len(rs) != 12 {
+				t.Errorf("%d resources, want one for each of the 12 leftovers", len(rs))
 			}
 			var removed []string
 			for _, r := range rs {
@@ -122,11 +121,9 @@ func TestResources(t *testing.T) {
 }
 
 func TestDependsOn(t *testing.T) {
-	deps := Module{}.DependsOn()
-	for _, want := range []string{"shell", "golang", "kubectl", "protoc", "mutagen", "python_tools", "intellij"} {
-		if !slices.Contains(deps, want) {
-			t.Errorf("DependsOn() = %q, want %s, which replaces what the cleanup deletes", deps, want)
-		}
+	want := []string{"shell", "golang", "kubectl", "stern", "yq", "lnav", "protoc", "mutagen", "python_tools", "intellij"}
+	if deps := (Module{}).DependsOn(); !slices.Equal(deps, want) {
+		t.Errorf("DependsOn() = %q, want %q: the modules that replace what the cleanup deletes, and no others", deps, want)
 	}
 }
 
