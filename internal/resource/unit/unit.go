@@ -48,11 +48,13 @@ const (
 var bootedDir = "/run/systemd/system"
 
 // Unit is a systemd unit. Its check reports a unit file to write (with the
-// file package's drift check) and a unit that isn't enabled or running; a
-// oneshot service without RemainAfterExit, which is inactive once it's
-// run, only needs enabling, unless it failed. Applying writes the file,
-// reloads systemd, and enables and starts the unit; a unit whose file
-// changed is restarted.
+// file package's drift check) and a unit that isn't enabled or running.
+// Two kinds of inactive unit only need enabling: a oneshot service without
+// RemainAfterExit, which is inactive once it's run, unless it failed; and
+// a unit whose last start systemd skipped because a condition in its unit
+// file didn't hold, such as a ConditionPathExists= path that isn't there.
+// Applying writes the file, reloads systemd, and enables and starts the
+// unit; a unit whose file changed is restarted.
 //
 // While maisys can't reach systemd, because it isn't running the system,
 // as in WSL until /etc/wsl.conf's [boot] systemd takes effect, or, for a
@@ -271,8 +273,9 @@ var (
 )
 
 // status reports whether the unit is enabled, and whether it's started:
-// running, or, for an enabled oneshot service (see oneshot), run without
-// failing, which leaves it inactive.
+// running, or, if it's enabled, inactive because it's a oneshot service
+// (see oneshot) that ran without failing, or because systemd skipped its
+// last start (see skipped).
 func (u *Unit) status(ctx context.Context, rt *resource.Runtime) (enabled, started bool, err error) {
 	state, err := u.state(ctx, rt.Runner, "is-enabled", unitFileStates, "enabled")
 	if err != nil {
@@ -290,18 +293,55 @@ func (u *Unit) status(ctx context.Context, rt *resource.Runtime) (enabled, start
 	}
 	switch state {
 	case "active", "reloading", "refreshing":
-		started = true
+		return enabled, true, nil
 	case "inactive":
+		if !enabled {
+			return false, false, nil
+		}
 		// An enabled oneshot service ran when maisys enabled it, or at boot.
-		if enabled {
-			content, err := u.Content(rt)
-			if err != nil {
-				return false, false, err
-			}
-			started = oneshot(u.Name, content)
+		content, err := u.Content(rt)
+		if err != nil {
+			return false, false, err
+		}
+		if oneshot(u.Name, content) {
+			return true, true, nil
+		}
+		started, err = u.skipped(ctx, rt)
+		return true, started, err
+	}
+	return enabled, false, nil
+}
+
+// skipped reports whether systemd skipped the unit's last start because a
+// condition in its unit file (Condition...=) didn't hold, which leaves the
+// unit inactive without failing. That's the unit file's choice, not a
+// change for maisys to make: systemd checks the conditions again the next
+// time it starts the unit, such as at the next boot. It says so in the
+// run's log. systemctl show's ConditionResult is "no" both then and before
+// the conditions were ever checked, which ConditionTimestampMonotonic, 0
+// until they are, tells apart.
+func (u *Unit) skipped(ctx context.Context, rt *resource.Runtime) (bool, error) {
+	res, err := rt.Runner.Run(ctx, systemctl(u.User, "show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", u.Name))
+	if err != nil {
+		return false, err
+	}
+	props := map[string]string{}
+	for line := range strings.Lines(string(res.Stdout)) {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			props[key] = value
 		}
 	}
-	return enabled, started, nil
+	if checked := props["ConditionTimestampMonotonic"]; props["ConditionResult"] != "no" || checked == "" || checked == "0" {
+		return false, nil
+	}
+	if rt.Log != nil {
+		status := "systemctl status " + u.Name
+		if u.User {
+			status = "systemctl --user status " + u.Name
+		}
+		_, _ = fmt.Fprintf(rt.Log, "%s: systemd skipped its last start because a condition in its unit file didn't hold, so it's left inactive (%s says which)\n", u.describe(), status)
+	}
+	return true, nil
 }
 
 // oneshot reports whether content is the unit file of a service of Type
@@ -399,7 +439,7 @@ func systemctl(user bool, args ...string) system.Cmd {
 		c.Label = "systemctl --user " + args[0]
 	}
 	// Checks run as you: reading a unit's state doesn't need root.
-	if args[0] == "is-enabled" || args[0] == "is-active" {
+	if args[0] == "is-enabled" || args[0] == "is-active" || args[0] == "show" {
 		c.Root = false
 	}
 	return c

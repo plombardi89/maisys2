@@ -38,6 +38,13 @@ type fakeSystemd struct {
 	// oneshot makes the unit a oneshot service, which is inactive again
 	// once it's started.
 	oneshot bool
+	// unmet makes a condition in the unit file not hold, so systemd skips
+	// starting it.
+	unmet bool
+	// conditionsMet is ConditionResult, and conditionsChecked
+	// ConditionTimestampMonotonic: when they were last checked, or 0.
+	conditionsMet     bool
+	conditionsChecked int
 	// answers, if set, answer the verbs they have instead, as systemctl
 	// does when it can't reach systemd.
 	answers map[string]system.Result
@@ -61,6 +68,16 @@ func (s *fakeSystemd) run(_ context.Context, c system.Cmd) (system.Result, error
 			return system.Result{Stdout: []byte("active\n")}, nil
 		}
 		return system.Result{ExitCode: 3, Stdout: []byte(s.active + "\n")}, nil
+	case "show":
+		want := []string{"show", "-p", "ConditionResult", "-p", "ConditionTimestampMonotonic", "x410.service"}
+		if !slices.Equal(args, want) {
+			return system.Result{ExitCode: 1, Stderr: []byte("unexpected arguments\n")}, nil
+		}
+		met := "no"
+		if s.conditionsMet {
+			met = "yes"
+		}
+		return system.Result{Stdout: []byte("ConditionResult=" + met + "\nConditionTimestampMonotonic=" + strconv.Itoa(s.conditionsChecked) + "\n")}, nil
 	case "enable":
 		s.enabled = "enabled"
 		if slices.Contains(args, "--now") {
@@ -74,11 +91,15 @@ func (s *fakeSystemd) run(_ context.Context, c system.Cmd) (system.Result, error
 	return system.Result{}, nil
 }
 
-// start starts the unit. s.mu must be held.
+// start starts the unit, checking its conditions first. s.mu must be held.
 func (s *fakeSystemd) start() {
-	s.active = "active"
-	if s.oneshot {
+	s.conditionsChecked += 1000
+	s.conditionsMet = !s.unmet
+	switch {
+	case s.unmet, s.oneshot:
 		s.active = "inactive"
+	default:
+		s.active = "active"
 	}
 }
 
@@ -171,11 +192,17 @@ func (e *env) apply(u *unit.Unit) (resource.Change, state.Record, []string) {
 	e.state.Put(rec)
 	var cmds []string
 	for _, cmd := range e.runner.Commands()[before:] {
-		if !strings.Contains(cmd, " is-") {
+		if !reads(cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
 	return c, rec, cmds
+}
+
+// reads reports whether the command line cmd only reads a unit's state, as
+// checks do.
+func reads(cmd string) bool {
+	return strings.Contains(cmd, " is-") || strings.Contains(cmd, " show ")
 }
 
 // sync checks u, as a sync's plan does, then applies it if the change
@@ -326,7 +353,7 @@ func TestUnit(t *testing.T) {
 				t.Errorf("Apply() ran %q, want %q", cmds, tt.cmds)
 			}
 			for _, call := range e.runner.Calls() {
-				if strings.Contains(call.Cmd.String(), " is-") == call.Cmd.Root {
+				if reads(call.Cmd.String()) == call.Cmd.Root {
 					t.Errorf("%s ran as root: %t, want only changes to run as root", call.Cmd, call.Cmd.Root)
 				}
 			}
@@ -714,6 +741,140 @@ func TestUnitOneshot(t *testing.T) {
 			t.Errorf("sync = %s %q, ran %q; want the unit created, and %q", c.Action, c.Summary, cmds, want)
 		}
 		if c := e.check(u); c.Action != resource.NoChange {
+			t.Errorf("Check() after the sync = %s %q, want no change", c.Action, c.Summary)
+		}
+	})
+}
+
+// TestUnitConditions checks an enabled unit whose last start systemd
+// skipped because a condition in its unit file didn't hold: it's left
+// inactive, without a note, and the run's log says why, so a dry run after
+// a sync has nothing to change. A unit whose conditions were never
+// checked, or held when it last started, is started, and one whose file
+// changed is restarted all the same.
+func TestUnitConditions(t *testing.T) {
+	noBus := system.Result{ExitCode: 1, Stderr: []byte("Failed to connect to bus: No medium found\n")}
+	userUnit := func(content string) *unit.Unit {
+		return &unit.Unit{Name: "x410.service", User: true, Content: file.Bytes([]byte(content))}
+	}
+
+	t.Run("a dry run after a sync", func(t *testing.T) {
+		for _, user := range []bool{false, true} {
+			e := newEnv(t)
+			var log strings.Builder
+			e.rt.Log = &log
+			e.systemd.unmet = true
+			u, ran, want := e.unit(service), "systemctl", "systemd unit x410.service: systemd skipped its last start because a condition in its unit file didn't hold, so it's left inactive (systemctl status x410.service says which)\n"
+			if user {
+				u, ran, want = userUnit(service), "systemctl --user", "systemd user unit x410.service: systemd skipped its last start because a condition in its unit file didn't hold, so it's left inactive (systemctl --user status x410.service says which)\n"
+			}
+			reload := []string{ran + " daemon-reload", ran + " enable x410.service", ran + " restart x410.service"}
+			if c, cmds := e.sync(u); c.Action != resource.Create || !slices.Equal(systemctl(cmds), reload) {
+				t.Errorf("sync = %s %q, ran %q; want the unit created and started with %q", c.Action, c.Summary, cmds, reload)
+			}
+			if c := e.check(u); c.Action != resource.NoChange || len(c.Notes) > 0 || c.Record != nil {
+				t.Errorf("Check() after the sync = %+v, want no change", c)
+			}
+			if log.String() != want {
+				t.Errorf("the log has %q, want %q", log.String(), want)
+			}
+		}
+	})
+
+	tests := []struct {
+		name    string
+		unmet   bool         // whether a condition doesn't hold when the unit is synced
+		after   func(e *env) // what happens after the sync, if anything
+		summary string       // what the check says, if anything
+		wantErr string
+	}{
+		{
+			name:  "skipped",
+			unmet: true,
+		},
+		{
+			name: "never started",
+			after: func(e *env) {
+				e.systemd.active, e.systemd.conditionsMet, e.systemd.conditionsChecked = "inactive", false, 0
+			},
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "stopped after it started",
+			after:   func(e *env) { e.systemd.active = "inactive" },
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "skipped, then disabled",
+			unmet:   true,
+			after:   func(e *env) { e.systemd.enabled = "disabled" },
+			summary: "systemd unit x410.service (enable and start)",
+		},
+		{
+			name:  "systemctl show without the time",
+			unmet: true,
+			after: func(e *env) {
+				e.systemd.answers = map[string]system.Result{"show": {Stdout: []byte("ConditionResult=no\n")}}
+			},
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "systemctl show fails",
+			unmet:   true,
+			after:   func(e *env) { e.systemd.answers = map[string]system.Result{"show": noBus} },
+			wantErr: "systemctl show failed with exit code 1: Failed to connect to bus: No medium found",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			u := e.unit(service)
+			e.systemd.unmet = tt.unmet
+			e.sync(u)
+			if tt.after != nil {
+				tt.after(e)
+			}
+			c, err := u.Check(t.Context(), e.rt)
+			switch {
+			case tt.wantErr != "":
+				if err == nil || err.Error() != tt.wantErr {
+					t.Errorf("Check() = %+v, %v; want the error %q", c, err, tt.wantErr)
+				}
+			case err != nil:
+				t.Fatalf("Check() error = %v", err)
+			case c.Summary != tt.summary || (c.Action == resource.NoChange) != (tt.summary == "") || len(c.Notes) > 0:
+				t.Errorf("Check() = %+v, want %q", c, tt.summary)
+			}
+		})
+	}
+
+	t.Run("a new unit file", func(t *testing.T) {
+		e := newEnv(t)
+		e.systemd.unmet = true
+		e.sync(e.unit("[Unit]\n"))
+		c, cmds := e.sync(e.unit(service))
+		want := []string{"systemctl daemon-reload", "systemctl enable x410.service", "systemctl restart x410.service"}
+		if c.Action != resource.Update || c.Summary != "systemd unit x410.service (update the unit file)" || !slices.Equal(systemctl(cmds), want) {
+			t.Errorf("sync = %s %q, ran %q; want the unit file updated, and %q", c.Action, c.Summary, cmds, want)
+		}
+		if c := e.check(e.unit(service)); c.Action != resource.NoChange {
+			t.Errorf("Check() after the sync = %s %q, want no change", c.Action, c.Summary)
+		}
+	})
+
+	t.Run("a new unit file written without a login session", func(t *testing.T) {
+		e := newEnv(t)
+		e.systemd.unmet = true
+		e.sync(userUnit("[Unit]\n"))
+		e.leaveSession()
+		e.sync(userUnit(service))
+		e.startSystemd()
+		c, cmds := e.sync(userUnit(service))
+		want := []string{"systemctl --user daemon-reload", "systemctl --user enable x410.service", "systemctl --user restart x410.service"}
+		if c.Action != resource.Update || c.Summary != "systemd user unit x410.service (restart with its new unit file)" || !slices.Equal(cmds, want) {
+			t.Errorf("sync = %s %q, ran %q; want the unit restarted, with %q", c.Action, c.Summary, cmds, want)
+		}
+		if c := e.check(userUnit(service)); c.Action != resource.NoChange {
 			t.Errorf("Check() after the sync = %s %q, want no change", c.Action, c.Summary)
 		}
 	})
