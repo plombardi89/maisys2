@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/plombardi89/maisys2/internal/resource"
@@ -100,7 +101,8 @@ func (u *Unit) describe() string {
 // Check compares the unit file, and whether the unit is enabled and
 // running. If both are right but the state file's record of the unit file
 // is missing or out of date, the change has the record applying would
-// leave.
+// leave. It fails if systemctl doesn't print the unit's state, as when it
+// can't reach systemd.
 func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := u.validate(); err != nil {
 		return resource.Change{}, err
@@ -182,27 +184,58 @@ func (u *Unit) validate() error {
 	return nil
 }
 
+// The states systemctl is-enabled and is-active print, as systemctl
+// --state=help lists them, with "not-found", which is-enabled prints for a
+// unit without a file.
+var (
+	unitFileStates = []string{
+		"enabled", "enabled-runtime", "linked", "linked-runtime", "alias", "masked", "masked-runtime",
+		"static", "disabled", "indirect", "generated", "transient", "bad", "not-found",
+	}
+	activeStates = []string{"active", "reloading", "refreshing", "inactive", "failed", "activating", "deactivating", "maintenance"}
+)
+
 // status reports whether the unit is enabled and running.
 func (u *Unit) status(ctx context.Context, r system.Runner) (enabled, active bool, err error) {
-	c := systemctl(u.User, "is-enabled", u.Name)
-	c.AllowExit = []int{1}
-	res, err := r.Run(ctx, c)
+	state, err := u.state(ctx, r, "is-enabled", unitFileStates, "enabled")
 	if err != nil {
 		return false, false, err
 	}
-	switch firstLine(res.Stdout) {
+	switch state {
 	// Static, indirect and generated units are started by something else,
 	// and can't be enabled themselves.
 	case "enabled", "static", "indirect", "generated", "alias":
 		enabled = true
 	}
 
-	c = systemctl(u.User, "is-active", u.Name)
-	c.AllowExit = []int{1, 2, 3, 4}
-	if res, err = r.Run(ctx, c); err != nil {
+	if state, err = u.state(ctx, r, "is-active", activeStates, "active"); err != nil {
 		return false, false, err
 	}
-	return enabled, firstLine(res.Stdout) == "active", nil
+	return enabled, state == "active" || state == "reloading" || state == "refreshing", nil
+}
+
+// state runs systemctl's verb, is-enabled or is-active, for the unit, and
+// returns the state it prints: one of known, or else, if it exits with 0,
+// ok, the state that means, for a state newer than maisys. Anything else,
+// such as systemctl's error when it can't reach systemd, is an error that
+// says what systemctl printed, so the plan doesn't count on systemctl
+// working when it's applied.
+func (u *Unit) state(ctx context.Context, r system.Runner, verb string, known []string, ok string) (string, error) {
+	c := systemctl(u.User, verb, u.Name)
+	c.AllowExit = []int{1, 2, 3, 4}
+	res, err := r.Run(ctx, c)
+	if err != nil {
+		return "", err
+	}
+	state := firstLine(res.Stdout)
+	switch {
+	case slices.Contains(known, state):
+		return state, nil
+	case res.ExitCode == 0:
+		return ok, nil
+	}
+	c.AllowExit = nil
+	return "", system.CheckExit(c, res)
 }
 
 // firstLine returns the first line of out, trimmed.

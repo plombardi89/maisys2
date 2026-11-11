@@ -35,12 +35,18 @@ type fakeSystemd struct {
 	mu      sync.Mutex
 	enabled string // what is-enabled prints
 	active  string // what is-active prints
+	// answers, if set, answer the verbs they have instead, as systemctl
+	// does when it can't reach systemd.
+	answers map[string]system.Result
 }
 
 func (s *fakeSystemd) run(_ context.Context, c system.Cmd) (system.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	args := slices.DeleteFunc(slices.Clone(c.Args), func(a string) bool { return a == "--user" })
+	if res, ok := s.answers[args[0]]; ok {
+		return res, nil
+	}
 	switch args[0] {
 	case "is-enabled":
 		if s.enabled == "enabled" || s.enabled == "static" {
@@ -310,6 +316,80 @@ func TestUnitStatic(t *testing.T) {
 	e.systemd.enabled = "static"
 	if c := e.check(e.unit(service)); c.Action != resource.NoChange {
 		t.Errorf("Check() of a static unit = %s %q, want no change", c.Action, c.Summary)
+	}
+}
+
+// TestUnitState checks what a check makes of what systemctl is-enabled and
+// is-active print: a state, a state newer than maisys, which their exit
+// code tells, or anything else, such as systemctl's error when it can't
+// reach systemd, which fails the check with what systemctl printed rather
+// than plan a change that fails.
+func TestUnitState(t *testing.T) {
+	noBus := system.Result{ExitCode: 1, Stderr: []byte("Failed to connect to bus: No medium found\n")}
+	tests := []struct {
+		name    string
+		user    bool
+		answers map[string]system.Result
+		summary string // the check's summary, if it doesn't fail
+		wantErr string
+	}{
+		{
+			name:    "no user bus",
+			user:    true,
+			answers: map[string]system.Result{"is-enabled": noBus},
+			wantErr: "systemctl --user is-enabled failed with exit code 1: Failed to connect to bus: No medium found",
+		},
+		{
+			name:    "is-active can't reach systemd",
+			answers: map[string]system.Result{"is-active": noBus},
+			wantErr: "systemctl is-active failed with exit code 1: Failed to connect to bus: No medium found",
+		},
+		{
+			name:    "not a state",
+			answers: map[string]system.Result{"is-enabled": {ExitCode: 1, Stdout: []byte("Unit x410.service could not be found.\n")}},
+			wantErr: "systemctl is-enabled failed with exit code 1: Unit x410.service could not be found.",
+		},
+		{
+			name:    "states newer than maisys",
+			answers: map[string]system.Result{"is-enabled": {Stdout: []byte("enabled-forever\n")}, "is-active": {Stdout: []byte("active-ish\n")}},
+		},
+		{
+			name:    "masked",
+			answers: map[string]system.Result{"is-enabled": {ExitCode: 1, Stdout: []byte("masked\n")}},
+			summary: "systemd unit x410.service (enable)",
+		},
+		{
+			name:    "reloading",
+			answers: map[string]system.Result{"is-active": {Stdout: []byte("reloading\n")}},
+		},
+		{
+			name:    "restarting after a failure",
+			answers: map[string]system.Result{"is-active": {ExitCode: 3, Stdout: []byte("activating\n")}},
+			summary: "systemd unit x410.service (start)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			u := e.unit(service)
+			if tt.user {
+				u = &unit.Unit{Name: "x410.service", User: true, Content: file.Bytes([]byte(service))}
+			}
+			e.apply(u)
+			e.systemd.answers = tt.answers
+			c, err := u.Check(t.Context(), e.rt)
+			switch {
+			case tt.wantErr != "":
+				if err == nil || err.Error() != tt.wantErr {
+					t.Errorf("Check() = %+v, %v; want the error %q", c, err, tt.wantErr)
+				}
+			case err != nil:
+				t.Fatalf("Check() error = %v", err)
+			case tt.summary == "" && c.Action != resource.NoChange,
+				tt.summary != "" && (c.Action != resource.Update || c.Summary != tt.summary):
+				t.Errorf("Check() = %s %q, want %q", c.Action, c.Summary, tt.summary)
+			}
+		})
 	}
 }
 
