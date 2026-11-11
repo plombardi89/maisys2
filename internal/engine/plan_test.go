@@ -141,6 +141,15 @@ func TestPlanDuplicateIDs(t *testing.T) {
 			want: "modules files and shell both have a resource with the ID file:~/.zshrc",
 		},
 		{
+			name: "a module left out by only",
+			setup: func(e *testEnv) {
+				e.only = []string{"files"}
+				e.add("files", nil, res("file:~/.zshrc", resource.Create, ""))
+				e.add("shell", nil, res("file:~/.zshrc", resource.Create, ""))
+			},
+			want: "modules files and shell both have a resource with the ID file:~/.zshrc",
+		},
+		{
 			name:  "no ID",
 			setup: func(e *testEnv) { e.add("files", nil, res("", resource.Create, "")) },
 			want:  "module files has a resource without an ID",
@@ -353,6 +362,102 @@ func TestPlanRemovals(t *testing.T) {
 	}
 }
 
+// TestPlanRemovalsOfMovedResources checks that a record is removed only if
+// no enabled module has its resource any more, even when the sync is
+// limited to the module the record names: a resource can move to another
+// module, and its record names the old one until the resource next
+// changes. If a module can't list its resources, nothing is removed.
+func TestPlanRemovalsOfMovedResources(t *testing.T) {
+	const heldBack = "removals held back: files couldn't list what it manages: the config repo's files aren't available"
+	tests := []struct {
+		name         string
+		only         []string
+		disabled     string // a module that's turned off
+		failing      bool   // whether files can't list its resources
+		wantModules  []string
+		wantRemovals []string
+		wantWarnings []string
+	}{
+		{
+			name:         "full sync",
+			wantModules:  []string{"shell", "files"},
+			wantRemovals: []string{"file:~/.vimrc", "file:~/.old"},
+		},
+		{
+			name:         "only the module the record names",
+			only:         []string{"shell"},
+			wantModules:  []string{"shell"},
+			wantRemovals: []string{"file:~/.old"},
+		},
+		{
+			name:         "only the module that has it now",
+			only:         []string{"files"},
+			wantModules:  []string{"files"},
+			wantRemovals: []string{"file:~/.vimrc"},
+		},
+		{
+			name:         "the module that has it now is turned off",
+			disabled:     "files",
+			wantModules:  []string{"shell"},
+			wantRemovals: []string{"file:~/.vimrc", "file:~/.old", "file:~/.zshrc"},
+		},
+		{
+			name:         "the module that has it now fails",
+			failing:      true,
+			wantModules:  []string{"shell", "files"},
+			wantWarnings: []string{heldBack},
+		},
+		{
+			name:         "a module left out by only fails",
+			only:         []string{"shell"},
+			failing:      true,
+			wantModules:  []string{"shell"},
+			wantWarnings: []string{heldBack},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.only = tt.only
+			e.add("shell", nil, res("file:~/.bashrc", resource.NoChange, ""))
+			files := e.add("files", nil, res("file:~/.zshrc", resource.NoChange, ""))
+			if tt.failing {
+				files.err = errors.New("the config repo's files aren't available")
+			}
+			if tt.disabled != "" {
+				e.disable(tt.disabled)
+			}
+			e.record("file:~/.bashrc", "file", "shell")
+			e.record("file:~/.zshrc", "file", "shell") // moved to files
+			e.record("file:~/.old", "file", "shell")
+			e.record("file:~/.vimrc", "file", "files")
+			e.remover(&fakeRemover{kind: "file", change: resource.Change{Action: resource.Remove}})
+
+			p := e.plan()
+			if got := names(p); !slices.Equal(got, tt.wantModules) {
+				t.Errorf("modules = %q, want %q", got, tt.wantModules)
+			}
+			if got := removalIDs(p); !slices.Equal(got, tt.wantRemovals) {
+				t.Errorf("removals = %q, want %q", got, tt.wantRemovals)
+			}
+			if !slices.Equal(p.Warnings, tt.wantWarnings) {
+				t.Errorf("warnings = %q, want %q", p.Warnings, tt.wantWarnings)
+			}
+			if wantFailed := tt.failing && slices.Contains(tt.wantModules, "files"); p.Failed() != wantFailed {
+				t.Errorf("Failed() = %t, want %t", p.Failed(), wantFailed)
+			}
+
+			e.apply(t.Context())
+			want := slices.DeleteFunc([]string{"file:~/.bashrc", "file:~/.old", "file:~/.vimrc", "file:~/.zshrc"}, func(id string) bool {
+				return slices.Contains(tt.wantRemovals, id)
+			})
+			if got := e.ids(); !slices.Equal(got, want) {
+				t.Errorf("after applying, the state file has %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // TestPlanNeverPrompts plans checks that run commands as root while sudo
 // needs a password: they're checked during apply, and sudo is never
 // started.
@@ -392,8 +497,9 @@ func TestPlanFailures(t *testing.T) {
 	e.add("mage", []string{"golang"}, res("tool:mage", resource.Create, "mage"))
 	e.add("lint", []string{"mage"}, res("tool:lint", resource.Create, "lint"))
 	e.add("files", nil, res("file:~/.gitconfig", resource.Create, "gitconfig"))
-	broken2 := e.add("kubectl", nil, res("tool:kubectl", resource.Create, "kubectl"))
-	broken2.err = errors.New("no resources")
+	broken2 := res("tool:kubectl", resource.Create, "kubectl")
+	broken2.checkErr = errors.New("no such version")
+	e.add("kubectl", nil, broken2)
 	e.record("tool:gopls", "tool", "golang")
 	e.record("tool:old-lint", "tool", "lint")
 	e.record("tool:kubectl-old", "tool", "kubectl")

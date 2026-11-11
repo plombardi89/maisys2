@@ -1,0 +1,10 @@
+Plan for phil-workp14s (ubuntu 26.04, amd64)
+
+golang
+  ~ toolchain 1.27.3 → 1.27.4 (latest)
+prune
+  - kubectl 1.36.0
+  error: checking the removal of tool stern: permission denied
+
+1 to change, 1 to remove.
+1 removal couldn't be checked, so it won't be applied.

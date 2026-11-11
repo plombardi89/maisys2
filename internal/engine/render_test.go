@@ -111,6 +111,20 @@ func TestRenderPlan(t *testing.T) {
 			},
 		},
 		{
+			name: "removal-failed",
+			setup: func(e *testEnv) {
+				e.add("golang", nil, res("tool:golang", resource.Update, "toolchain 1.27.3 → 1.27.4 (latest)"))
+				e.record("tool:stern", "tool", "stern")
+				e.record("tool:kubectl", "tool", "kubectl")
+				e.modules = append(e.modules, configOnly{"stern"}, configOnly{"kubectl"})
+				e.remover(&fakeRemover{
+					kind:     "tool",
+					change:   resource.Change{Action: resource.Remove, Summary: "kubectl 1.36.0"},
+					checkErr: map[string]error{"tool:stern": errors.New("permission denied")},
+				})
+			},
+		},
+		{
 			name: "windows",
 			setup: func(e *testEnv) {
 				e.windows()

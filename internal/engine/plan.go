@@ -64,8 +64,10 @@ type PlanInput struct {
 	Modules []config.Module
 	// Removers remove what's taken out of the config, by kind.
 	Removers resource.Removers
-	// Only limits the sync to these modules, if it isn't empty. Records
-	// of other modules are left alone.
+	// Only limits the sync to these modules, if it isn't empty: only
+	// their resources are checked and applied, and only their records
+	// removed. The other enabled modules still list their resources, so
+	// that nothing one of them has is removed.
 	Only []string
 	// Parallel is how many checks run at once. Zero means
 	// DefaultParallel.
@@ -145,12 +147,14 @@ type Removal struct {
 
 // NewPlan checks every resource of the enabled modules (only those in
 // in.Only, if it's set) against the live system, and finds the records in
-// the state file that are no longer wanted. Checks run in parallel and never
-// ask for a password: a check that needs one is checked during apply. A
-// check that fails makes its module fail, which the plan shows. NewPlan
-// returns an error if the modules can't be ordered, if two resources have
-// the same ID, if in.Only names a module that doesn't exist, or if a change
-// needs sudo and sudo is missing or the user may not use it.
+// the state file that are no longer wanted: those of resources no enabled
+// module has. Checks run in parallel and never ask for a password: a check
+// that needs one is checked during apply. A check that fails makes its
+// module fail, which the plan shows. If an enabled module can't list its
+// resources, the plan removes nothing, and warns why. NewPlan returns an
+// error if the modules can't be ordered, if two resources have the same
+// ID, if in.Only names a module that doesn't exist, or if a change needs
+// sudo and sudo is missing or the user may not use it.
 func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 	if in.Machine == nil {
 		return nil, errors.New("planning needs the machine's config")
@@ -195,39 +199,46 @@ func NewPlan(ctx context.Context, in PlanInput) (*Plan, error) {
 		return nil, err
 	}
 
+	// Every enabled module lists its resources, whether or not the sync is
+	// limited to it, and owner maps each resource's ID to its module. A
+	// record whose ID owner has is never removed, whichever module it
+	// names: a resource can move to another module, and its record may
+	// still name the old one. If a module can't list its resources, any of
+	// them might have a record, so nothing is removed.
 	owner := map[string]string{}
+	listed := map[string][]resource.Resource{}
+	unlisted := map[string]error{}
+	for _, mod := range enabled(in, func(string) bool { return true }) {
+		name := mod.Info().Name
+		resources, err := mod.Resources(in.Machine.Modules[name], p.rt)
+		if err != nil {
+			unlisted[name] = err
+			p.Warnings = append(p.Warnings, fmt.Sprintf("removals held back: %s couldn't list what it manages: %v", name, err))
+			continue
+		}
+		if err := own(owner, name, resources); err != nil {
+			return nil, err
+		}
+		listed[name] = resources
+	}
+
 	for _, mod := range mods {
 		name := mod.Info().Name
-		mp := &ModulePlan{Name: name}
+		mp := &ModulePlan{Name: name, Err: unlisted[name]}
 		for _, dep := range mod.DependsOn() {
 			if slices.ContainsFunc(mods, func(m Module) bool { return m.Info().Name == dep }) {
 				mp.DependsOn = append(mp.DependsOn, dep)
 			}
 		}
 		p.Modules = append(p.Modules, mp)
-		resources, err := mod.Resources(in.Machine.Modules[name], p.rt)
-		if err != nil {
-			mp.Err = err
-			continue
-		}
-		for _, r := range resources {
-			id := r.ID()
-			switch {
-			case id == "":
-				return nil, fmt.Errorf("module %s has a resource without an ID", name)
-			case r.Kind() == "":
-				return nil, fmt.Errorf("module %s's resource %s has no kind", name, id)
-			case owner[id] == name:
-				return nil, fmt.Errorf("module %s has two resources with the ID %s", name, id)
-			case owner[id] != "":
-				return nil, fmt.Errorf("modules %s and %s both have a resource with the ID %s", owner[id], name, id)
-			}
-			owner[id] = name
+		for _, r := range listed[name] {
 			mp.Items = append(mp.Items, &Item{Resource: r})
 		}
 	}
 
-	p.Removals = removals(in, st, owner, selected)
+	if len(unlisted) == 0 {
+		p.Removals = removals(in, st, owner, selected)
+	}
 	p.check(ctx, cmp.Or(in.Parallel, DefaultParallel))
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -283,8 +294,8 @@ func checkModules(mods []config.Module) error {
 	return nil
 }
 
-// enabled returns the modules that are turned on, part of the sync, and
-// have resources, in the order in.Modules lists them.
+// enabled returns the modules that have resources, are turned on, and are
+// selected, in the order in.Modules lists them.
 func enabled(in PlanInput, selected func(string) bool) []Module {
 	var mods []Module
 	for _, mod := range in.Modules {
@@ -296,6 +307,27 @@ func enabled(in PlanInput, selected func(string) bool) []Module {
 		}
 	}
 	return mods
+}
+
+// own adds the resources of module name to owner, which maps each ID to
+// the module whose resource has it. It returns an error if a resource has
+// no ID or kind, or its ID is taken.
+func own(owner map[string]string, name string, resources []resource.Resource) error {
+	for _, r := range resources {
+		id := r.ID()
+		switch {
+		case id == "":
+			return fmt.Errorf("module %s has a resource without an ID", name)
+		case r.Kind() == "":
+			return fmt.Errorf("module %s's resource %s has no kind", name, id)
+		case owner[id] == name:
+			return fmt.Errorf("module %s has two resources with the ID %s", name, id)
+		case owner[id] != "":
+			return fmt.Errorf("modules %s and %s both have a resource with the ID %s", owner[id], name, id)
+		}
+		owner[id] = name
+	}
+	return nil
 }
 
 // order sorts mods so that every module comes after the ones it depends on,
@@ -348,11 +380,12 @@ func cycle(mods []Module, deps map[string][]string, done map[string]bool) error 
 	}
 }
 
-// removals returns the records in st that no resource in owner has, and
-// that belong to the sync: those of the selected modules (all of them
-// without Only). They're in the order they're removed: modules in the
-// reverse of their order in in.Modules, after modules maisys doesn't have,
-// and records by ID.
+// removals returns the records in st that belong to the sync, those of the
+// selected modules (all of them without Only), and whose ID no enabled
+// module has a resource with: owner maps the IDs to the modules that have
+// them. They're in the order they're removed: modules in the reverse of
+// their order in in.Modules, after modules maisys doesn't have, and records
+// by ID.
 func removals(in PlanInput, st *state.State, owner map[string]string, selected func(string) bool) []*Removal {
 	rank := map[string]int{}
 	for i, mod := range in.Modules {
