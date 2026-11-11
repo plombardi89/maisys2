@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
+	"path"
+	"slices"
 	"strings"
 
 	"github.com/plombardi89/maisys2/internal/config"
@@ -17,6 +20,8 @@ import (
 const (
 	// sourcesDir holds apt's deb822 sources.
 	sourcesDir = "/etc/apt/sources.list.d"
+	// sourcesList is apt's main sources file, in the one-line format.
+	sourcesList = "/etc/apt/sources.list"
 	// keyringsDir holds the keys apt's sources are signed with.
 	keyringsDir = "/etc/apt/keyrings"
 	// armorHeader starts an ASCII-armored OpenPGP public key.
@@ -26,6 +31,8 @@ const (
 // AptSource is an apt source (Ubuntu), written in deb822 format to
 // /etc/apt/sources.list.d/NAME.sources, with the key its repo is signed
 // with in /etc/apt/keyrings/NAME.asc. The plan shows it as "repo NAME".
+// It fails if another of apt's sources files already has the repo (see
+// Check).
 type AptSource struct {
 	// Name names the repo, and its files.
 	Name string
@@ -119,9 +126,14 @@ func (s *AptSource) state() (sourceOK, keyOK, exists bool, err error) {
 }
 
 // Check compares the source file and the key with what's wanted. It never
-// downloads the key: a key from a URL is compared by its sha256.
+// downloads the key: a key from a URL is compared by its sha256. It fails
+// if another of apt's sources files has an entry for one of the source's
+// URIs and suites (see conflict).
 func (s *AptSource) Check(_ context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := s.check(rt); err != nil {
+		return resource.Change{}, err
+	}
+	if err := s.conflict(); err != nil {
 		return resource.Change{}, err
 	}
 	sourceOK, keyOK, exists, err := s.state()
@@ -140,6 +152,9 @@ func (s *AptSource) Check(_ context.Context, rt *resource.Runtime) (resource.Cha
 // downloading the key if it comes from a URL.
 func (s *AptSource) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
 	if err := s.check(rt); err != nil {
+		return state.Record{}, err
+	}
+	if err := s.conflict(); err != nil {
 		return state.Record{}, err
 	}
 	m, err := pkg.ManagerFor(rt)
@@ -186,4 +201,161 @@ func hasSHA256(root, name, sum string) (bool, error) {
 		return false, err
 	}
 	return sha256Of(data) == strings.ToLower(sum), nil
+}
+
+// conflict returns an error naming the file, if one of apt's other sources
+// files (sources.list, and the .list and .sources files in
+// sources.list.d) has an entry for one of the source's URIs and suites,
+// such as one written following the vendor's instructions before maisys
+// managed the repo. apt takes the two for one repo, and if they name
+// different keys, every apt command fails ("Conflicting values set for
+// option Signed-By").
+func (s *AptSource) conflict() error {
+	files := []string{sourcesList}
+	entries, err := os.ReadDir(fsPath(s.root, sourcesDir))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && name != path.Base(s.sourceFile()) && (strings.HasSuffix(name, ".list") || strings.HasSuffix(name, ".sources")) {
+			files = append(files, sourcesDir+"/"+name)
+		}
+	}
+	for _, name := range files {
+		data, err := os.ReadFile(fsPath(s.root, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		parse := parseOneLine
+		if strings.HasSuffix(name, ".sources") {
+			parse = parseDeb822
+		}
+		for _, entry := range parse(string(data)) {
+			for _, uri := range entry.uris {
+				for _, suite := range entry.suites {
+					if slices.Contains(s.Suites, suite) && slices.ContainsFunc(s.URIs, func(u string) bool { return sameURI(u, uri) }) {
+						return fmt.Errorf("%s already has %s %s, which apt can't have twice with different keys: delete that entry, then run maisys sync again", name, uri, suite)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// aptEntry is an entry of apt's sources: the repos at URIs, each with
+// Suites.
+type aptEntry struct {
+	uris, suites []string
+}
+
+// parseOneLine reads the entries of a sources file in the one-line format,
+// such as sources.list, with lines such as "deb [options] URI suite
+// components...".
+func parseOneLine(data string) []aptEntry {
+	var entries []aptEntry
+	for line := range strings.Lines(data) {
+		line = strings.TrimSpace(stripComment(line))
+		f := strings.Fields(line)
+		if len(f) == 0 || (f[0] != "deb" && f[0] != "deb-src") {
+			continue
+		}
+		rest := strings.TrimSpace(line[len(f[0]):])
+		if strings.HasPrefix(rest, "[") {
+			var ok bool
+			if _, rest, ok = strings.Cut(rest, "]"); !ok {
+				continue
+			}
+		}
+		if words := strings.Fields(rest); len(words) >= 2 {
+			entries = append(entries, aptEntry{uris: words[:1], suites: words[1:2]})
+		}
+	}
+	return entries
+}
+
+// stripComment returns a line of the one-line format without its comment,
+// which starts with a "#" outside the options' brackets.
+func stripComment(line string) string {
+	inOptions := false
+	for i, c := range line {
+		switch {
+		case c == '[':
+			inOptions = true
+		case c == ']':
+			inOptions = false
+		case c == '#' && !inOptions:
+			return line[:i]
+		}
+	}
+	return line
+}
+
+// parseDeb822 reads the enabled entries of a sources file in the deb822
+// format, made of stanzas of fields such as "URIs:" and "Suites:", each of
+// which may have several values.
+func parseDeb822(data string) []aptEntry {
+	var entries []aptEntry
+	fields := map[string]string{}
+	var last string
+	end := func() {
+		types := strings.Fields(fields["types"])
+		if (slices.Contains(types, "deb") || slices.Contains(types, "deb-src")) && enabled(fields["enabled"]) {
+			entries = append(entries, aptEntry{uris: strings.Fields(fields["uris"]), suites: strings.Fields(fields["suites"])})
+		}
+		fields, last = map[string]string{}, ""
+	}
+	for line := range strings.Lines(data) {
+		line = strings.TrimRight(line, "\r\n")
+		switch {
+		case strings.HasPrefix(line, "#"):
+		case strings.TrimSpace(line) == "":
+			end()
+		case line[0] == ' ' || line[0] == '\t':
+			if last != "" {
+				fields[last] += " " + strings.TrimSpace(line)
+			}
+		default:
+			name, value, ok := strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
+			last = strings.ToLower(strings.TrimSpace(name))
+			fields[last] = strings.TrimSpace(value)
+		}
+	}
+	end()
+	return entries
+}
+
+// enabled reports whether a deb822 stanza whose Enabled field is value is
+// enabled: it is unless the field says no.
+func enabled(value string) bool {
+	switch strings.ToLower(value) {
+	case "no", "false", "off", "without", "disable", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+// sameURI reports whether apt takes the URIs a and b to be the same repo.
+// apt keeps one copy of a repo's lists whatever the scheme (http or https)
+// and user name, so those don't count, and neither do a slash at the end
+// and the host's case.
+func sameURI(a, b string) bool {
+	return repoKey(a) == repoKey(b)
+}
+
+// repoKey returns what sameURI compares of uri.
+func repoKey(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(uri, "/")
+	}
+	return strings.ToLower(u.Host) + strings.TrimRight(u.EscapedPath(), "/")
 }

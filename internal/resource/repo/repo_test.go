@@ -336,6 +336,117 @@ func TestAptSourceChecks(t *testing.T) {
 	}
 }
 
+// TestAptSourceConflicts checks for other entries of the same repo in
+// apt's sources: with a different key, apt fails for everything.
+func TestAptSourceConflicts(t *testing.T) {
+	const (
+		documented = "deb [arch=amd64 signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com noble main\n"
+		advice     = ", which apt can't have twice with different keys: delete that entry, then run maisys sync again"
+	)
+	tests := []struct {
+		name string
+		file string
+		data string
+		want string
+	}{
+		{
+			name: "the vendor's documented .list",
+			file: "/etc/apt/sources.list.d/hashicorp.list",
+			data: documented,
+			want: "/etc/apt/sources.list.d/hashicorp.list already has https://apt.releases.hashicorp.com noble" + advice,
+		},
+		{
+			name: "sources.list, over http, with a slash at the end and comments",
+			file: "/etc/apt/sources.list",
+			data: "# HashiCorp\n\tdeb  [ arch=amd64 ]  http://APT.releases.hashicorp.com/ noble main # added by hand\n",
+			want: "/etc/apt/sources.list already has http://APT.releases.hashicorp.com/ noble" + advice,
+		},
+		{
+			name: "a source package entry",
+			file: "/etc/apt/sources.list.d/hashicorp-src.list",
+			data: "deb-src [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com noble main\n",
+			want: "/etc/apt/sources.list.d/hashicorp-src.list already has https://apt.releases.hashicorp.com noble" + advice,
+		},
+		{
+			name: "a deb822 file with several stanzas, URIs and suites",
+			file: "/etc/apt/sources.list.d/vendors.sources",
+			data: "Types: deb\nURIs: https://download.example.com/apt\nSuites: noble\nComponents: main\nSigned-By: /etc/apt/keyrings/example.asc\n\n" +
+				"# HashiCorp\ntypes: deb deb-src\nURIs: https://download.example.org\n https://apt.releases.hashicorp.com/\n" +
+				"Suites: jammy noble\nComponents: main\nEnabled: yes\nSigned-By: /usr/share/keyrings/hashicorp-archive-keyring.gpg\n",
+			want: "/etc/apt/sources.list.d/vendors.sources already has https://apt.releases.hashicorp.com/ noble" + advice,
+		},
+		{
+			name: "a disabled deb822 stanza",
+			file: "/etc/apt/sources.list.d/hashicorp-old.sources",
+			data: "Types: deb\nURIs: https://apt.releases.hashicorp.com\nSuites: noble\nComponents: main\nEnabled: no\n" +
+				"Signed-By: /usr/share/keyrings/hashicorp-archive-keyring.gpg\n",
+		},
+		{
+			name: "another suite",
+			file: "/etc/apt/sources.list.d/hashicorp.list",
+			data: strings.Replace(documented, "noble", "jammy", 1),
+		},
+		{
+			name: "another suite, in deb822",
+			file: "/etc/apt/sources.list.d/hashicorp-old.sources",
+			data: "Types: deb\nURIs: https://apt.releases.hashicorp.com\nSuites: jammy\nComponents: main\n",
+		},
+		{
+			name: "another repo on the same server",
+			file: "/etc/apt/sources.list.d/hashicorp-test.list",
+			data: strings.Replace(documented, ".com", ".com/test", 1),
+		},
+		{
+			name: "a commented-out entry",
+			file: "/etc/apt/sources.list.d/hashicorp.list",
+			data: "# " + documented,
+		},
+		{
+			name: "a file apt doesn't read",
+			file: "/etc/apt/sources.list.d/hashicorp.list.save",
+			data: documented,
+		},
+		{
+			name: "maisys's own file",
+			file: "/etc/apt/sources.list.d/hashicorp.sources",
+			data: hashicorpSource,
+		},
+		{
+			name: "Ubuntu's own sources",
+			file: "/etc/apt/sources.list.d/ubuntu.sources",
+			data: "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates noble-backports\n" +
+				"Components: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n\n" +
+				"Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n" +
+				"Components: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestMachine(t, config.Ubuntu)
+			m.write(tt.file, tt.data)
+			src := hashicorp(m, Key{Data: []byte(testKey)})
+
+			_, err := src.Check(t.Context(), m.rt)
+			var got string
+			if err != nil {
+				got = err.Error()
+			}
+			if got != tt.want {
+				t.Errorf("Check() error = %v, want %q", err, tt.want)
+			}
+			if tt.want == "" {
+				return
+			}
+			if _, err := src.Apply(t.Context(), m.rt); err == nil || err.Error() != tt.want {
+				t.Errorf("Apply() error = %v, want %q", err, tt.want)
+			}
+			for _, c := range m.runner.Calls() {
+				t.Errorf("Apply() ran %s, want nothing written", c.Cmd)
+			}
+		})
+	}
+}
+
 const hashicorpRepo = `[hashicorp]
 name=Hashicorp Stable - $basearch
 baseurl=https://rpm.releases.hashicorp.com/fedora/$releasever/$basearch/stable
