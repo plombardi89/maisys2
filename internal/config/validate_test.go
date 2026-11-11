@@ -482,6 +482,46 @@ paths.b = "~/.gitconfig"
 			want: []string{`machines/box.toml:6:11: writer.paths.a and writer.paths.b both write ~/.gitconfig on machine "box"`},
 		},
 		{
+			name: "paths with backslashes, on Windows",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`
+os = "windows"
+
+[writer]
+enabled = true
+paths.a = '~/.config\foo'
+paths.b = "~/.config/foo"
+paths.c = '~\AppData\nvim\'
+paths.d = "~/appdata/nvim/init.lua"
+
+[copier]
+enabled = true
+dirs.e = { source = "src/e/", target = '~\Docs' }
+dirs.f = { source = "src/f/", target = '~\Docs\' }
+`),
+				"src/e/x.txt": file(""),
+				"src/f/X.txt": file(""),
+			},
+			want: []string{
+				`machines/box.toml:6:11: writer.paths.a and writer.paths.b both write ~/.config/foo on machine "box"`,
+				`machines/box.toml:8:11: writer.paths.d (~/appdata/nvim/init.lua) is inside writer.paths.c (~\AppData\nvim\) on machine "box": only one of them can write it`,
+				`machines/box.toml:13:40: copier.dirs.e.target and copier.dirs.f.target both write ~\Docs\X.txt on machine "box"`,
+			},
+		},
+		{
+			name: "backslashes, on Linux",
+			files: fstest.MapFS{"machines/box.toml": file(`
+os = "fedora"
+
+[writer]
+enabled = true
+paths.a = '~/.config\foo'
+paths.b = "~/.config/foo"
+paths.c = '~\AppData\nvim\'
+paths.d = '~\AppData\nvim\init.lua'
+`)},
+		},
+		{
 			name: "paths that differ in case, on Linux",
 			files: fstest.MapFS{"machines/box.toml": file(`
 os = "fedora"

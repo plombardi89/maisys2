@@ -364,13 +364,22 @@ func (v *validator) ownership() {
 		dir   bool
 	}
 	var claims []claim
+	// slashes returns p with the separators the machine's OS uses as "/".
+	slashes := func(p string) string {
+		if m.OS == Windows {
+			// On Windows a backslash separates folders too.
+			return strings.ReplaceAll(p, `\`, "/")
+		}
+		return p
+	}
 	add := func(t Target) {
-		clean := path.Clean(t.Path)
+		p := slashes(t.Path)
+		clean := path.Clean(p)
 		if m.OS == Windows {
 			// Windows paths ignore case.
 			clean = strings.ToLower(clean)
 		}
-		claims = append(claims, claim{Target: t, clean: clean, dir: strings.HasSuffix(t.Path, "/")})
+		claims = append(claims, claim{Target: t, clean: clean, dir: strings.HasSuffix(p, "/")})
 	}
 	for _, mod := range v.repo.Modules {
 		cfg := m.Modules[mod.Info().Name]
@@ -390,7 +399,7 @@ func (v *validator) ownership() {
 				continue
 			}
 			dir := t.Path
-			if !strings.HasSuffix(dir, "/") {
+			if !strings.HasSuffix(slashes(dir), "/") {
 				dir += "/"
 			}
 			for _, f := range files {
