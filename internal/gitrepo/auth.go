@@ -64,6 +64,12 @@ func storeHelper(file string) string {
 	return "store --file " + shellQuote(filepath.ToSlash(file))
 }
 
+// useHTTPPath is git's setting that makes credential helpers match a
+// repo's path as well as its host. A token saved with SaveToken is for a
+// host, so the setting, which the user may have turned on, is turned off
+// wherever maisys signs in with one.
+const useHTTPPath = "credential.useHttpPath"
+
 // useCredentialsFile sets up the clone to sign in with the credentials saved
 // in file, and with no other credential helper, so the token is only ever
 // used for this clone.
@@ -71,6 +77,7 @@ func (r *Repo) useCredentialsFile(ctx context.Context, file string) error {
 	for _, args := range [][]string{
 		{"config", "--local", "--replace-all", "credential.helper", ""},
 		{"config", "--local", "--add", "credential.helper", storeHelper(file)},
+		{"config", "--local", "--replace-all", useHTTPPath, "false"},
 	} {
 		if _, err := r.run(ctx, call{dir: r.Dir, args: args}); err != nil {
 			return err

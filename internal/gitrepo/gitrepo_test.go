@@ -181,6 +181,35 @@ func TestCloneWithPrompt(t *testing.T) {
 	assertContent(t, filepath.Join(r.Dir, "base.toml"), "[packages]\n")
 }
 
+// TestPromptTokenWithHTTPPath checks the token typed at the prompt works
+// when the user's git settings make credential helpers match the repo's
+// path too, which the saved token doesn't have: maisys turns that off for
+// the clone.
+func TestPromptTokenWithHTTPPath(t *testing.T) {
+	tests := []struct {
+		name string
+		key  func(srv *gitServer) string
+	}{
+		{"for every URL", func(*gitServer) string { return "credential.useHttpPath" }},
+		{"for the server's URL", func(srv *gitServer) string { return "credential." + srv.url + ".useHttpPath" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			srv := newGitServer(t, sb)
+			sb.setGlobal(tt.key(srv), "true")
+			r, _ := cloneWithPrompt(t, sb, srv)
+
+			sb.commitUpstream(filepath.Join(srv.root, "config.git"), "base.toml", "[packages]\n")
+			r.Auth.Prompt = noPrompt(t)
+			if err := r.Pull(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertContent(t, filepath.Join(r.Dir, "base.toml"), "[packages]\n")
+		})
+	}
+}
+
 func TestPullWithExpiredToken(t *testing.T) {
 	sb := newSandbox(t)
 	srv := newGitServer(t, sb)

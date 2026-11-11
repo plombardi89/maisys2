@@ -129,7 +129,7 @@ func (r *Repo) cloneWithPrompt(ctx context.Context, url string, args []string) (
 	if err := SaveToken(file, url, token); err != nil {
 		return nil, err
 	}
-	c := call{dir: outsideRepos(), args: args, config: []string{"credential.helper=", "credential.helper=" + storeHelper(file)}, progress: true}
+	c := call{dir: outsideRepos(), args: args, config: []string{"credential.helper=", "credential.helper=" + storeHelper(file), useHTTPPath + "=false"}, progress: true}
 	if _, err := r.run(ctx, c); err != nil {
 		return nil, cloneError(shown, err, func(stderr string) error {
 			return tokenRejected(stderr, shown, "that token")
