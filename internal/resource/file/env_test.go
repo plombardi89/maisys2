@@ -66,13 +66,24 @@ func (e *env) check(r resource.Resource) resource.Change {
 	return c
 }
 
-// apply checks and applies r, and keeps its record as the engine does.
+// apply checks r, and applies it if the check found something to do,
+// keeping its record as the engine does: the one Apply returns, or the one
+// the check says r should have. It returns the change and r's record.
 func (e *env) apply(r resource.Resource) (resource.Change, state.Record) {
 	e.t.Helper()
 	c := e.check(r)
-	rec, err := r.Apply(e.t.Context(), e.rt)
-	if err != nil {
-		e.t.Fatalf("Apply() error = %v", err)
+	var rec state.Record
+	switch {
+	case c.Action.Applies():
+		var err error
+		if rec, err = r.Apply(e.t.Context(), e.rt); err != nil {
+			e.t.Fatalf("Apply() error = %v", err)
+		}
+	case c.Record != nil:
+		rec = *c.Record
+	default:
+		rec, _ = e.state.Get(r.ID())
+		return c, rec
 	}
 	rec.ID, rec.Kind, rec.Module = r.ID(), r.Kind(), "files"
 	e.state.Put(rec)

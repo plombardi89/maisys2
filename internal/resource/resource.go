@@ -114,6 +114,13 @@ type Change struct {
 	// or admin on Windows. A resource's changes need it anyway if the
 	// resource is Privileged; a removal's need it only if this is set.
 	Privileged bool
+	// Record, for a change that doesn't apply, is the record the resource
+	// should have in the state file, because what's there is already right
+	// but the record is missing or out of date, as when you edited a file
+	// to what the config now says. The engine saves it when the plan is
+	// applied, without showing or counting it, filling it in as it fills
+	// in Apply's records. Nil keeps the record there is.
+	Record *state.Record
 }
 
 // Runtime is what resources check and apply with. It's shared by every

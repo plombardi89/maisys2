@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"time"
 
 	"github.com/plombardi89/maisys2/internal/resource"
@@ -48,6 +49,10 @@ var privateDirs = []string{".ssh", ".gnupg"}
 //     manages a file that's there already with other contents. Its record
 //     says maisys took it over, so it's left in place once it's taken out
 //     of the config.
+//
+// A file that's there already with the right contents is taken over too,
+// without a change in the plan: the check only says what its record
+// should be (see resource.Change.Record).
 //
 // Applying backs a file up to <path>.maisys-bak.<timestamp> before it
 // overwrites changes maisys didn't make. Files are written to a temporary
@@ -96,13 +101,19 @@ func (f *File) Targets() []string { return []string{Display(f.Path)} }
 // Privileged reports whether the file is written as root.
 func (f *File) Privileged() bool { return f.Root }
 
-// Check compares the file on disk with what it should hold.
+// Check compares the file on disk with what it should hold. If it already
+// holds that, but the state file's record of it is missing or out of date,
+// the change has the record applying would leave.
 func (f *File) Check(_ context.Context, rt *resource.Runtime) (resource.Change, error) {
 	in, err := f.inspect(rt)
 	if err != nil {
 		return resource.Change{}, err
 	}
-	return in.change(), nil
+	c := in.change()
+	if rec := f.record(in); c.Action == resource.NoChange && !in.current(rec) {
+		c.Record = &rec
+	}
+	return c, nil
 }
 
 // Apply writes the file, backing up what's there first if maisys didn't
@@ -113,14 +124,7 @@ func (f *File) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 	if err != nil {
 		return state.Record{}, err
 	}
-	rec := state.Record{
-		Paths:    []string{in.display},
-		Details:  map[string]string{DetailHash: hash(in.want)},
-		TookOver: in.prev.TookOver || in.exists && !in.recorded(),
-	}
-	if f.Root {
-		rec.Details[DetailRoot] = "true"
-	}
+	rec := f.record(in)
 	if in.change().Action == resource.NoChange {
 		return rec, nil
 	}
@@ -226,6 +230,29 @@ func (f *File) wantPerm(cur fs.FileMode, exists bool) fs.FileMode {
 // recorded reports whether there's a record of what maisys last wrote.
 func (in *inspection) recorded() bool {
 	return in.prev.Details[DetailHash] != ""
+}
+
+// record returns the record of the file once it holds what it should: the
+// hash of that, whether it's written as root, and whether maisys took it
+// over, which it did if it was there before maisys recorded writing it.
+func (f *File) record(in *inspection) state.Record {
+	rec := state.Record{
+		Paths:    []string{in.display},
+		Details:  map[string]string{DetailHash: hash(in.want)},
+		TookOver: in.prev.TookOver || in.exists && !in.recorded(),
+	}
+	if f.Root {
+		rec.Details[DetailRoot] = "true"
+	}
+	return rec
+}
+
+// current reports whether the state file's record says what rec does.
+// Details other resources keep in it, such as a unit's name, don't count.
+func (in *inspection) current(rec state.Record) bool {
+	return in.prev.Details[DetailHash] == rec.Details[DetailHash] &&
+		in.prev.Details[DetailRoot] == rec.Details[DetailRoot] &&
+		in.prev.TookOver == rec.TookOver && slices.Equal(in.prev.Paths, rec.Paths)
 }
 
 // sameContent reports whether the file holds what it should, as a regular

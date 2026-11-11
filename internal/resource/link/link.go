@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/plombardi89/maisys2/internal/resource"
@@ -49,13 +50,25 @@ func (l *Link) Targets() []string { return []string{file.Display(l.Path)} }
 // Privileged returns false: links are made as you.
 func (l *Link) Privileged() bool { return false }
 
-// Check compares the link with what it should point at.
+// Check compares the link with what it should point at. If it points
+// there, but the state file's record of it is missing or out of date, the
+// change has the record applying would leave.
 func (l *Link) Check(_ context.Context, rt *resource.Runtime) (resource.Change, error) {
 	in, err := l.inspect(rt)
 	if err != nil {
 		return resource.Change{}, err
 	}
-	return in.change(), nil
+	c := in.change()
+	if c.Action == resource.NoChange {
+		var prev state.Record
+		if rt.Previous != nil {
+			prev, _ = rt.Previous(l.ID())
+		}
+		if rec := in.record(); prev.Details[DetailTarget] != in.target || !slices.Equal(prev.Paths, rec.Paths) {
+			c.Record = &rec
+		}
+	}
+	return c, nil
 }
 
 // Apply makes the link, replacing what's at its path: a link that points
@@ -66,10 +79,7 @@ func (l *Link) Apply(_ context.Context, rt *resource.Runtime) (state.Record, err
 	if err != nil {
 		return state.Record{}, err
 	}
-	rec := state.Record{
-		Paths:   []string{in.display},
-		Details: map[string]string{DetailTarget: in.target},
-	}
+	rec := in.record()
 	if in.change().Action == resource.NoChange {
 		return rec, nil
 	}
@@ -163,6 +173,14 @@ func (in *inspection) change() resource.Change {
 		return resource.Change{Action: resource.Update, Summary: in.display + " → " + in.shown + " (was " + in.was + ")"}
 	default:
 		return resource.Change{}
+	}
+}
+
+// record returns the record of the link once it points where it should.
+func (in *inspection) record() state.Record {
+	return state.Record{
+		Paths:   []string{in.display},
+		Details: map[string]string{DetailTarget: in.target},
 	}
 }
 

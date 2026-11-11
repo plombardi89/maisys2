@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"testing"
@@ -20,9 +21,10 @@ var testNow = time.Date(2026, 11, 6, 9, 30, 0, 0, time.UTC)
 
 // env is a home folder and the runtime links check and apply with.
 type env struct {
-	t    *testing.T
-	home string
-	rt   *resource.Runtime
+	t     *testing.T
+	home  string
+	state *state.State
+	rt    *resource.Runtime
 }
 
 func newEnv(t *testing.T) *env {
@@ -31,9 +33,11 @@ func newEnv(t *testing.T) *env {
 		t.Skip("maisys only makes symlinks on Linux")
 	}
 	home := t.TempDir()
-	return &env{t: t, home: home, rt: &resource.Runtime{
-		Paths: settings.Paths{Home: home},
-		Now:   func() time.Time { return testNow },
+	st := &state.State{}
+	return &env{t: t, home: home, state: st, rt: &resource.Runtime{
+		Paths:    settings.Paths{Home: home},
+		Previous: st.Get,
+		Now:      func() time.Time { return testNow },
 	}}
 }
 
@@ -155,6 +159,83 @@ func TestLink(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLinkRecord checks the record a check says a link should have when it
+// already points where it should: none while the state file's record is
+// up to date, and otherwise the one applying would leave. With that
+// record, the link is deleted once it's taken out of the config.
+func TestLinkRecord(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(e *env)
+		want  bool // whether the check has a record
+	}{
+		{
+			name: "made by maisys",
+			setup: func(e *env) {
+				e.apply(&link.Link{Path: "~/bin/x", Target: "/opt/b"})
+			},
+		},
+		{
+			name: "pointed by hand where the config now says",
+			setup: func(e *env) {
+				e.apply(&link.Link{Path: "~/bin/x", Target: "/opt/a"})
+				if err := os.Remove(e.path("bin/x")); err != nil {
+					e.t.Fatal(err)
+				}
+				e.symlink("/opt/b", "bin/x")
+			},
+			want: true,
+		},
+		{
+			name:  "there before maisys",
+			setup: func(e *env) { e.symlink("/opt/b", "bin/x") },
+			want:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			tt.setup(e)
+			l := &link.Link{Path: "~/bin/x", Target: "/opt/b"}
+			c, err := l.Check(t.Context(), e.rt)
+			if err != nil || c.Action != resource.NoChange {
+				t.Fatalf("Check() = %s %q, %v; want no change", c.Action, c.Summary, err)
+			}
+			want := state.Record{Paths: []string{"~/bin/x"}, Details: map[string]string{link.DetailTarget: "/opt/b"}}
+			switch {
+			case !tt.want && c.Record != nil:
+				t.Errorf("Check() has the record %+v, want none: the state file's is up to date", *c.Record)
+			case tt.want && (c.Record == nil || !reflect.DeepEqual(*c.Record, want)):
+				t.Errorf("Check() has the record %v, want %+v", c.Record, want)
+			case tt.want:
+				e.put(l, *c.Record)
+			}
+
+			rec, _ := e.state.Get(l.ID())
+			var r link.Remover
+			if c, err := r.CheckRemove(t.Context(), e.rt, rec); err != nil || c.Action != resource.Remove {
+				t.Errorf("CheckRemove() = %+v, %v; want the link deleted", c, err)
+			}
+		})
+	}
+}
+
+// apply applies l, and keeps its record.
+func (e *env) apply(l *link.Link) {
+	e.t.Helper()
+	rec, err := l.Apply(e.t.Context(), e.rt)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.put(l, rec)
+}
+
+// put keeps rec as l's record, as the engine does.
+func (e *env) put(l *link.Link, rec state.Record) {
+	rec.ID, rec.Kind, rec.Module = l.ID(), l.Kind(), "golang"
+	e.state.Put(rec)
 }
 
 func TestLinkTargets(t *testing.T) {

@@ -98,7 +98,9 @@ func (u *Unit) describe() string {
 }
 
 // Check compares the unit file, and whether the unit is enabled and
-// running.
+// running. If both are right but the state file's record of the unit file
+// is missing or out of date, the change has the record applying would
+// leave.
 func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := u.validate(); err != nil {
 		return resource.Change{}, err
@@ -130,9 +132,18 @@ func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change
 	case !active:
 		todo = "start"
 	default:
-		return resource.Change{}, nil
+		if fc.Record != nil {
+			u.details(fc.Record)
+		}
+		return resource.Change{Record: fc.Record}, nil
 	}
 	return resource.Change{Action: resource.Update, Summary: u.describe() + " (" + todo + ")"}, nil
+}
+
+// details adds the unit's name and scope to rec, its file's record.
+func (u *Unit) details(rec *state.Record) {
+	rec.Details[DetailName] = u.Name
+	rec.Details[DetailScope] = scope(u.User)
 }
 
 // Apply writes the unit file if it needs writing, then reloads systemd
@@ -150,8 +161,7 @@ func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 	if err != nil {
 		return state.Record{}, err
 	}
-	rec.Details[DetailName] = u.Name
-	rec.Details[DetailScope] = scope(u.User)
+	u.details(&rec)
 
 	steps := [][]string{{"enable", "--now", u.Name}}
 	if fc.Action != resource.NoChange {

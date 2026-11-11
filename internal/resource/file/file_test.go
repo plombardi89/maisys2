@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/resource/file"
+	"github.com/plombardi89/maisys2/internal/state"
 )
 
 func sha(s string) string {
@@ -168,6 +170,79 @@ func TestFileNoChange(t *testing.T) {
 			tt.setup(e)
 			if c := e.check(textFile(".gitconfig", tt.want)); c.Action != resource.NoChange || c.Summary != "" {
 				t.Errorf("Check() = %s %q, want no change", c.Action, c.Summary)
+			}
+		})
+	}
+}
+
+// TestFileRecord checks the record a check says a file should have when it
+// already holds what it should: none while the state file's record is up
+// to date, and otherwise the one applying would leave.
+func TestFileRecord(t *testing.T) {
+	const rel = ".config/foo"
+	tests := []struct {
+		name  string
+		setup func(e *env)
+		// want is the record the check says the file should have, if any.
+		want *state.Record
+	}{
+		{
+			name:  "applied before",
+			setup: func(e *env) { e.apply(textFile(rel, "v2\n")) },
+		},
+		{
+			name: "edited to what the config now says",
+			setup: func(e *env) {
+				e.apply(textFile(rel, "v1\n"))
+				e.write(rel, "v2\n", 0o644)
+			},
+			want: &state.Record{Paths: []string{"~/.config/foo"}, Details: map[string]string{file.DetailHash: sha("v2\n")}},
+		},
+		{
+			name:  "there before maisys with the same contents",
+			setup: func(e *env) { e.write(rel, "v2\n", 0o644) },
+			want:  &state.Record{Paths: []string{"~/.config/foo"}, Details: map[string]string{file.DetailHash: sha("v2\n")}, TookOver: true},
+		},
+		{
+			name: "taken over, then edited to what the config now says",
+			setup: func(e *env) {
+				e.write(rel, "mine\n", 0o644)
+				e.apply(textFile(rel, "v1\n"))
+				e.write(rel, "v2\n", 0o644)
+			},
+			want: &state.Record{Paths: []string{"~/.config/foo"}, Details: map[string]string{file.DetailHash: sha("v2\n")}, TookOver: true},
+		},
+		{
+			name: "a record without what Apply records",
+			setup: func(e *env) {
+				e.apply(textFile(rel, "v2\n"))
+				e.state.Put(state.Record{ID: "file:~/.config/foo", Kind: "file", Module: "files"})
+			},
+			want: &state.Record{Paths: []string{"~/.config/foo"}, Details: map[string]string{file.DetailHash: sha("v2\n")}, TookOver: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			tt.setup(e)
+			f := textFile(rel, "v2\n")
+			c := e.check(f)
+			if c.Action != resource.NoChange || c.Summary != "" {
+				t.Errorf("Check() = %s %q, want no change", c.Action, c.Summary)
+			}
+			switch {
+			case tt.want == nil && c.Record != nil:
+				t.Errorf("Check() has the record %+v, want none: the state file's is up to date", *c.Record)
+			case tt.want != nil && c.Record == nil:
+				t.Errorf("Check() has no record, want %+v", *tt.want)
+			case tt.want != nil && !reflect.DeepEqual(*c.Record, *tt.want):
+				t.Errorf("Check() has the record %+v, want %+v", *c.Record, *tt.want)
+			}
+
+			// Once the record is saved, it's up to date.
+			e.apply(f)
+			if c := e.check(f); c.Action != resource.NoChange || c.Record != nil {
+				t.Errorf("Check() after the record was saved = %s %q with record %v, want no change and no record", c.Action, c.Summary, c.Record)
 			}
 		})
 	}

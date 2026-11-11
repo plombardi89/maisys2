@@ -99,8 +99,9 @@ type RemovalResult struct {
 // context that isn't cancelled, and then stops Apply before the next step;
 // in.Abort stops the step in progress too. At the end, Apply records when
 // the sync ended and how in the state file. A plan without changes can be
-// applied too: that only deletes the records of things that are already
-// gone, and records the sync.
+// applied too: that only brings the state file up to date, deleting the
+// records of things that are already gone and saving those that checks
+// found out of date (see resource.Change.Record), and records the sync.
 func Apply(ctx context.Context, p *Plan, in ApplyInput) *Result {
 	a := &applier{plan: p, in: in, ctx: ctx, res: &Result{}, stopped: map[string]string{}, finished: map[string]bool{}, grouped: map[*Item]error{}}
 	var cancel context.CancelFunc
@@ -202,11 +203,15 @@ func (a *applier) modules() {
 }
 
 // module applies the changes of the plan's module i, which hasn't failed,
-// recording what happened in mr.
+// recording what happened in mr. The records of its resources with
+// nothing to apply are brought up to date (see refresh).
 func (a *applier) module(i int, mr *ModuleResult) {
 	m := a.plan.Modules[i]
 	for k, item := range m.Items {
 		if !item.Change.Action.Applies() {
+			if a.refresh(m.Name, item) != nil {
+				return
+			}
 			continue
 		}
 		if _, ok := a.grouped[item]; !ok {
@@ -325,6 +330,23 @@ func (a *applier) apply(module string, r resource.Resource) error {
 		return err
 	}
 	a.put(module, r, rec)
+	return a.save()
+}
+
+// refresh brings the record of item, whose change doesn't apply, up to
+// date, and saves it: to the record its check says the resource should
+// have, if it says one, or else to belong to module, if it belonged to
+// another one. If the state file can't be saved, it sets a.res.Err.
+func (a *applier) refresh(module string, item *Item) error {
+	switch prev, ok := a.in.Store.Get(item.Resource.ID()); {
+	case item.Change.Record != nil:
+		a.put(module, item.Resource, *item.Change.Record)
+	case ok && prev.Module != module:
+		prev.Module = module
+		a.in.Store.Put(prev)
+	default:
+		return nil
+	}
 	return a.save()
 }
 

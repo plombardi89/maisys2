@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/state"
@@ -434,5 +436,99 @@ func TestApplyStateCantBeSaved(t *testing.T) {
 	result.Render(&b)
 	if !strings.HasPrefix(b.String(), "Nothing changed.\nStopped: saving the state file: ") {
 		t.Errorf("Render() = %q, want it to say the sync stopped", b.String())
+	}
+}
+
+// TestApplyRefreshesRecords applies a plan whose only effect is to bring
+// records up to date: the plan has nothing to change and applying it shows
+// nothing, but the records are saved, and only once it's applied.
+func TestApplyRefreshesRecords(t *testing.T) {
+	e := newTestEnv(t)
+	before := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, rec := range []state.Record{
+		{ID: "file:~/.gitconfig", Module: "files", Details: map[string]string{"sha256": "old"}},
+		{ID: "file:~/.vimrc", Module: "dotfiles", Details: map[string]string{"sha256": "vim"}},
+		{ID: "file:~/.zshrc", Module: "files", Details: map[string]string{"sha256": "zsh"}},
+	} {
+		rec.Kind, rec.Updated = "fake", before
+		e.store.Put(rec)
+	}
+	if err := e.store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	edited := res("file:~/.gitconfig", resource.NoChange, "")
+	edited.targets = []string{"~/.gitconfig"}
+	edited.change.Record = &state.Record{Details: map[string]string{"sha256": "new"}}
+	taken := res("file:~/.tmux.conf", resource.NoChange, "")
+	taken.change.Record = &state.Record{Paths: []string{"~/.tmux.conf"}, Details: map[string]string{"sha256": "tmux"}, TookOver: true}
+	e.add("files", nil, edited, res("file:~/.vimrc", resource.NoChange, ""), res("file:~/.zshrc", resource.NoChange, ""), taken)
+
+	p := e.plan()
+	var plan bytes.Buffer
+	p.Render(&plan, false)
+	if want := "Plan for phil-workp14s (ubuntu 26.04, amd64)\n\nNothing to change.\n"; plan.String() != want || p.HasChanges() {
+		t.Errorf("Render() =\n%s\nHasChanges() = %t; want\n%s", plan.String(), p.HasChanges(), want)
+	}
+	saved, err := state.Load(e.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := saved.Get("file:~/.gitconfig"); rec.Details["sha256"] != "old" {
+		t.Errorf("the plan saved the record %+v, want it saved only when the plan is applied", rec)
+	}
+
+	var progress bytes.Buffer
+	result := Apply(t.Context(), p, ApplyInput{Store: e.store, Progress: &progress})
+	var b bytes.Buffer
+	result.Render(&b)
+	if b.String() != "Nothing changed.\n" || progress.Len() > 0 || len(e.steps.get()) > 0 {
+		t.Errorf("Render() = %q, progress = %q, steps = %q; want nothing done or shown", b.String(), progress.String(), e.steps.get())
+	}
+
+	saved, err = state.Load(e.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]state.Record{
+		"file:~/.gitconfig": {Paths: []string{"~/.gitconfig"}, Details: map[string]string{"sha256": "new"}, Updated: testNow},
+		"file:~/.vimrc":     {Details: map[string]string{"sha256": "vim"}, Updated: before},
+		"file:~/.zshrc":     {Details: map[string]string{"sha256": "zsh"}, Updated: before},
+		"file:~/.tmux.conf": {Paths: []string{"~/.tmux.conf"}, Details: map[string]string{"sha256": "tmux"}, TookOver: true, Updated: testNow},
+	}
+	for id, w := range want {
+		w.ID, w.Kind, w.Module = id, "fake", "files"
+		if got, ok := saved.Get(id); !ok || !reflect.DeepEqual(got, w) {
+			t.Errorf("saved record of %s = %+v, want %+v", id, got, w)
+		}
+	}
+}
+
+// TestApplyRefreshesOnlyAppliedModules checks that the records of modules
+// that failed or were skipped aren't brought up to date.
+func TestApplyRefreshesOnlyAppliedModules(t *testing.T) {
+	e := newTestEnv(t)
+	for _, id := range []string{"file:~/.bashrc", "file:~/.inputrc", "file:~/.vimrc"} {
+		e.store.Put(state.Record{ID: id, Kind: "fake", Module: "old"})
+	}
+	refreshed := func(id string) *fakeResource {
+		r := res(id, resource.NoChange, "")
+		r.change.Record = &state.Record{Details: map[string]string{"sha256": "new"}}
+		return r
+	}
+	failing := res("file:~/.profile", resource.Create, "~/.profile")
+	failing.checkErr = errors.New("permission denied")
+	e.add("broken", nil, refreshed("file:~/.bashrc"), failing)
+	e.add("skipped", []string{"broken"}, refreshed("file:~/.inputrc"))
+	e.add("files", nil, refreshed("file:~/.vimrc"))
+
+	e.apply(t.Context())
+	saved, err := state.Load(e.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, module := range map[string]string{"file:~/.bashrc": "old", "file:~/.inputrc": "old", "file:~/.vimrc": "files"} {
+		if rec, _ := saved.Get(id); rec.Module != module || (module == "files") != (rec.Details["sha256"] == "new") {
+			t.Errorf("saved record of %s = %+v, want it refreshed only if its module was applied", id, rec)
+		}
 	}
 }

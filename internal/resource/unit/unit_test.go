@@ -2,10 +2,13 @@ package unit_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -308,6 +311,78 @@ func TestUnitStatic(t *testing.T) {
 	if c := e.check(e.unit(service)); c.Action != resource.NoChange {
 		t.Errorf("Check() of a static unit = %s %q, want no change", c.Action, c.Summary)
 	}
+}
+
+// TestUnitRecord checks the record a check says a running unit should have
+// when its file already holds what it should: none while the state file's
+// record is up to date, and otherwise the one applying would leave.
+func TestUnitRecord(t *testing.T) {
+	path := func(e *env) string { return filepath.Join(e.dir, "x410.service") }
+	tests := []struct {
+		name     string
+		setup    func(e *env)
+		want     bool // whether the check has a record
+		tookOver bool
+	}{
+		{
+			name:  "applied before",
+			setup: func(e *env) { e.apply(e.unit(service)) },
+		},
+		{
+			name: "edited to what the config now says",
+			setup: func(e *env) {
+				e.apply(e.unit("[Unit]\n"))
+				if err := os.WriteFile(path(e), []byte(service), 0o644); err != nil {
+					e.t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+		{
+			name: "there before maisys",
+			setup: func(e *env) {
+				if err := os.WriteFile(path(e), []byte(service), 0o644); err != nil {
+					e.t.Fatal(err)
+				}
+				e.systemd.enabled, e.systemd.active = "enabled", "active"
+			},
+			want:     true,
+			tookOver: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			tt.setup(e)
+			c := e.check(e.unit(service))
+			if c.Action != resource.NoChange {
+				t.Fatalf("Check() = %s %q, want no change", c.Action, c.Summary)
+			}
+			want := &state.Record{
+				Paths:    []string{path(e)},
+				Details:  map[string]string{file.DetailHash: sha(service), file.DetailRoot: "true", unit.DetailName: "x410.service", unit.DetailScope: "system"},
+				TookOver: tt.tookOver,
+			}
+			switch {
+			case !tt.want && c.Record != nil:
+				t.Errorf("Check() has the record %+v, want none: the state file's is up to date", *c.Record)
+			case tt.want && (c.Record == nil || !reflect.DeepEqual(c.Record, want)):
+				t.Errorf("Check() has the record %v, want %+v", c.Record, *want)
+			case tt.want:
+				rec := *c.Record
+				rec.ID, rec.Kind = "systemd-unit:x410.service", "systemd-unit"
+				e.state.Put(rec)
+				if c := e.check(e.unit(service)); c.Action != resource.NoChange || c.Record != nil {
+					t.Errorf("Check() after the record was saved = %s %q with record %v, want no change and no record", c.Action, c.Summary, c.Record)
+				}
+			}
+		})
+	}
+}
+
+func sha(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 func TestRemover(t *testing.T) {

@@ -131,3 +131,56 @@ func TestFilesSync(t *testing.T) {
 		t.Errorf("backups = %q, want one for taking over and one for the edit", backups)
 	}
 }
+
+// TestFilesSyncAlreadyRight syncs files that already hold what the config
+// says: one maisys wrote and you then edited, before committing the edit
+// to the config, and one that was there before maisys. The sync has nothing
+// to change, but brings their records up to date: the next change of the
+// config is an update without a backup, and taking them out deletes the
+// one maisys wrote and leaves the other.
+func TestFilesSyncAlreadyRight(t *testing.T) {
+	e := newEnv(t)
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync(t, e, store, textFile(".config/foo", "v1\n"))
+	e.write(".config/foo", "v2\n", 0o644)
+	e.write(".config/bar", "v2\n", 0o644)
+
+	got := sync(t, e, store, textFile(".config/foo", "v2\n"), textFile(".config/bar", "v2\n"))
+	if want := "Plan for box (ubuntu 26.04, amd64)\n\nNothing to change.\n"; got != want {
+		t.Errorf("plan once the files hold what the config says:\n%s\nwant:\n%s", got, want)
+	}
+
+	got = sync(t, e, store, textFile(".config/foo", "v3\n"), textFile(".config/bar", "v3\n"))
+	want := "Plan for box (ubuntu 26.04, amd64)\n\n" +
+		"files\n" +
+		"  ~ ~/.config/foo\n" +
+		"  ~ ~/.config/bar\n\n" +
+		"2 to change.\n"
+	if got != want {
+		t.Errorf("plan after changing the config:\n%s\nwant:\n%s", got, want)
+	}
+	for _, rel := range []string{".config/foo", ".config/bar"} {
+		if b := backups(t, e, rel); len(b) > 0 {
+			t.Errorf("backups = %q, want none: maisys wrote or took over what was there", b)
+		}
+	}
+
+	got = sync(t, e, store)
+	want = "Plan for box (ubuntu 26.04, amd64)\n\n" +
+		"prune\n" +
+		"  ! ~/.config/bar left in place; no longer managed\n" +
+		"  - ~/.config/foo\n\n" +
+		"1 to remove.\n"
+	if got != want {
+		t.Errorf("plan after taking the files out:\n%s\nwant:\n%s", got, want)
+	}
+	if _, err := os.Lstat(e.path(".config/foo")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("~/.config/foo is still there: %v", err)
+	}
+	if got := e.read(".config/bar"); got != "v3\n" {
+		t.Errorf("~/.config/bar holds %q, want it left in place", got)
+	}
+}
