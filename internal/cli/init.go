@@ -97,7 +97,7 @@ func initConfig(cmd *cobra.Command, g *globalOptions, opts initOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := checkScaffold(files, opts.remote); err != nil {
+	if err := checkScaffold(files, name, opts.remote); err != nil {
 		return err
 	}
 
@@ -250,15 +250,19 @@ func (g *globalOptions) askDistroUser(cmd *cobra.Command) (string, error) {
 	}
 }
 
-// checkScaffold validates the starter config before it's written, as a
-// repo cloned from url.
-func checkScaffold(files map[string]string, url string) error {
+// checkScaffold validates the starter config before it's written: this
+// machine's config, as a repo cloned from url, then every machine's.
+func checkScaffold(files map[string]string, machine, url string) error {
 	fsys := fstest.MapFS{}
 	for name, data := range files {
 		fsys[name] = &fstest.MapFile{Data: []byte(data), Mode: 0o644}
 	}
 	r := &config.Repo{FS: fsys, Modules: modules.All(), URL: url}
-	if _, err := r.ValidateAll(); err != nil {
+	_, err := r.Validate(machine)
+	if err == nil {
+		_, err = r.ValidateAll()
+	}
+	if err != nil {
 		return fmt.Errorf("the starter config doesn't pass validation, so it wasn't written:\n%w", err)
 	}
 	return nil

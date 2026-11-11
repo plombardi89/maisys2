@@ -125,7 +125,9 @@ func (r *Repo) MachineNames() ([]string, error) {
 // ValidateAll validates every machine in the repo, and reads every profile,
 // including those no machine lists. It returns every problem it finds, and
 // every warning (see Machine.Warnings), each reported once, even if it
-// affects several machines.
+// affects several machines. The rules that depend on the repo's URL aren't
+// checked, because it's the URL this machine clones the repo from, and
+// other machines may clone it from another one.
 func (r *Repo) ValidateAll() (warnings []string, err error) {
 	schema, err := newSchema(r.Modules)
 	if err != nil {
@@ -147,8 +149,10 @@ func (r *Repo) ValidateAll() (warnings []string, err error) {
 	if len(machines) == 0 && len(badMachines) == 0 {
 		errs = append(errs, fmt.Errorf("%s/ has no machine files", machinesDir))
 	}
+	anyURL := *r
+	anyURL.URL = ""
 	for _, name := range machines {
-		m, err := r.Validate(name)
+		m, err := anyURL.Validate(name)
 		errs = append(errs, err)
 		if m != nil {
 			for _, w := range m.Warnings {

@@ -35,6 +35,32 @@ func TestExampleValidates(t *testing.T) {
 	}
 }
 
+// TestValidateAllIgnoresTheCloneURL checks that the URL this machine clones
+// the config repo from only applies when this machine is validated: other
+// Windows hosts may clone the repo over HTTPS, and need no config_url.
+func TestValidateAllIgnoresTheCloneURL(t *testing.T) {
+	repo := &config.Repo{
+		FS: fstest.MapFS{
+			"machines/host.toml": {Data: []byte(`os = "windows"
+
+[wsl_host]
+enabled = true
+distros.dev = { image = "FedoraLinux-44", machine = "fedora-dev", user = "phil" }
+`)},
+			"machines/fedora-dev.toml": {Data: []byte("os = \"fedora\"\nos_version = \"44\"\n")},
+		},
+		Modules: modules.All(),
+		URL:     "git@github.com:me/config.git",
+	}
+	if _, err := repo.ValidateAll(); err != nil {
+		t.Errorf("ValidateAll:\n%v\nwant no errors", err)
+	}
+	want := "machines/host.toml:3:2: wsl_host.config_url is required, because this machine clones the config repo over SSH (git@github.com:me/config.git), and new distros clone it over HTTPS"
+	if _, err := repo.Validate("host"); err == nil || err.Error() != want {
+		t.Errorf("Validate(host) = %v, want %s", err, want)
+	}
+}
+
 // ruleRepo holds the files the module rule tests refer to.
 var ruleRepo = fstest.MapFS{
 	"files/gitconfig.tmpl":  {Data: []byte("[user]\n\temail = {{ .Vars.email }}\n")},

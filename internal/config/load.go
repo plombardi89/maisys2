@@ -40,8 +40,9 @@ type Repo struct {
 	// Modules are the modules whose tables config files may contain.
 	Modules []Module
 	// URL is the repo's own URL, the one this machine clones it from, if
-	// known. Validation uses it to check that new WSL distros can clone
-	// the repo.
+	// known. Validate uses it to check that new WSL distros can clone the
+	// repo. ValidateAll doesn't, because other machines may clone the repo
+	// from another URL.
 	URL string
 }
 

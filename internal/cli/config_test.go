@@ -407,14 +407,23 @@ version = "1.27"
 		},
 		{
 			name:  "the URL in the local settings, from inside the repo",
-			args:  []string{"config", "validate", "--all"},
+			args:  []string{"config", "validate"},
 			files: host,
+			env:   "host",
 			setup: func(e *testEnv) {
 				sshSettings(e)
 				e.wd = filepath.Join(e.wd, "machines")
 			},
 			code:   exitError,
 			stderr: "machines/host.toml:3:2: wsl_host.config_url is required",
+		},
+		{
+			name:   "the URL in the local settings, with every machine",
+			args:   []string{"config", "validate", "--all"},
+			files:  host,
+			setup:  sshSettings,
+			code:   exitOK,
+			stdout: "maisys: all 4 machines are valid\n",
 		},
 		{
 			name:  "the URL of another repo",
