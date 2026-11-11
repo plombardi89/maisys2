@@ -88,7 +88,7 @@ Works on Fedora, Ubuntu and Windows.
 | `files.items` | table of tables |  | `items` are the files and directories to copy, each under a name you choose. A later profile or the machine file can change one item, or turn it off with enabled = false, without repeating the rest. |
 | `files.items.<name>.enabled` | boolean | `true` | `enabled` copies the item. Items are on unless turned off. |
 | `files.items.<name>.source` | string | `""` | `source` is the path in the config repo. A directory is copied file by file, and files in the target directory that don't come from it are left alone. |
-| `files.items.<name>.target` | string | `""` | `target` is where the item goes, inside your home folder, such as "\~/.gitconfig". On Windows, \~ is %USERPROFILE%. |
+| `files.items.<name>.target` | string | `""` | `target` is where the item goes, inside your home folder, such as "\~/.gitconfig". A directory can also go in "\~/" itself. On Windows, \~ is %USERPROFILE%. |
 | `files.items.<name>.template` | boolean | `false` | `template` renders the source as a Go text/template, which can use .Vars, .Facts and .Machine. |
 | `files.items.<name>.mode` | string | `""` | `mode` sets the permissions, such as "0600". Without it, files keep the executable bit they have in the config repo. |
 | `files.items.<name>.eol` | string | `""` | `eol` set to "crlf" converts line endings to CRLF, for Windows programs that need them. Without it, line endings stay as they are in the config repo. |

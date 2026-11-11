@@ -63,10 +63,13 @@ distros.dev = { image = "FedoraLinux-44", machine = "fedora-dev", user = "phil" 
 
 // ruleRepo holds the files the module rule tests refer to.
 var ruleRepo = fstest.MapFS{
-	"files/gitconfig.tmpl":  {Data: []byte("[user]\n\temail = {{ .Vars.email }}\n")},
-	"files/nvim/init.lua":   {Data: []byte("vim.opt.number = true\n")},
-	"shell/zsh/aliases.zsh": {Data: []byte("alias ll='ls -lh'\n")},
-	"shell/bash/aliases.sh": {Data: []byte("alias ll='ls -lh'\n")},
+	"files/gitconfig.tmpl":              {Data: []byte("[user]\n\temail = {{ .Vars.email }}\n")},
+	"files/nvim/init.lua":               {Data: []byte("vim.opt.number = true\n")},
+	"files/fish/config.fish":            {Data: []byte("set -g fish_greeting\n")},
+	"files/home/.vimrc":                 {Data: []byte("set number\n")},
+	"files/fish-env/conf.d/maisys.fish": {Data: []byte("set -gx EDITOR nvim\n")},
+	"shell/zsh/aliases.zsh":             {Data: []byte("alias ll='ls -lh'\n")},
+	"shell/bash/aliases.sh":             {Data: []byte("alias ll='ls -lh'\n")},
 
 	"machines/fedora-dev.toml": {Data: []byte("os = \"fedora\"\nos_version = \"44\"\n")},
 	"machines/ubuntu-dev.toml": {Data: []byte("os = \"ubuntu\"\n")},
@@ -261,17 +264,43 @@ items.a = { source = "files/gitconfig.tmpl", target = "/etc/gitconfig" }
 items.b = { source = "files/gitconfig.tmpl", target = "~/../gitconfig" }
 items.c = { source = "files/gitconfig.tmpl", target = "~/a/../../gitconfig" }
 items.d = { source = "files/gitconfig.tmpl", target = '~/..\gitconfig' }
-items.e = { source = "files/nvim/", target = "~/" }
+items.e = { source = "files/gitconfig.tmpl", target = "~/" }
 items.f = { source = "files/gitconfig.tmpl", target = "~root/gitconfig" }
+items.g = { source = "files/nvim/", target = "~/.." }
 `,
 			want: []string{
 				`machines/box.toml:5:55: files.items.a.target must start with ~/, because files only go in your home folder, not "/etc/gitconfig"`,
 				`machines/box.toml:6:55: files.items.b.target must be a path inside your home folder, not "~/../gitconfig"`,
 				`machines/box.toml:7:55: files.items.c.target must be a path inside your home folder, not "~/a/../../gitconfig"`,
 				`machines/box.toml:8:55: files.items.d.target must be a path inside your home folder, not "~/..\\gitconfig"`,
-				`machines/box.toml:9:46: files.items.e.target must be a path inside your home folder, not "~/"`,
+				`machines/box.toml:9:55: files.items.e.target must be a path inside your home folder, such as "~/.gitconfig", not "~/": only a directory can be copied into ~/ itself`,
 				`machines/box.toml:10:55: files.items.f.target must start with ~/, because files only go in your home folder, not "~root/gitconfig"`,
+				`machines/box.toml:11:46: files.items.g.target must be a path inside your home folder, not "~/.."`,
 			},
+		},
+		{
+			name: "files: a directory copied into the home folder itself",
+			machine: `
+os = "fedora"
+
+[files]
+enabled = true
+items.home = { source = "files/home/", target = "~/" }
+items.dot = { source = "files/nvim/", target = "~/." }
+items.gitconfig = { source = "files/gitconfig.tmpl", target = "~/.gitconfig" }
+`,
+		},
+		{
+			name: "files: two directories with the same file",
+			machine: `
+os = "fedora"
+
+[files]
+enabled = true
+items.home = { source = "files/home/", target = "~/" }
+items.vim = { source = "files/home/", target = "~/./" }
+`,
+			want: []string{`machines/box.toml:6:48: files.items.home.target and files.items.vim.target both write ~/./.vimrc on machine "box"`},
 		},
 		{
 			name: "files: mode and eol",
@@ -320,7 +349,7 @@ items.b = { source = "files/gitconfig.tmpl", target = "~/./.gitconfig" }
 			want: []string{`machines/box.toml:6:55: files.items.a.target and files.items.b.target both write ~/./.gitconfig on machine "box"`},
 		},
 		{
-			name: "files: a file inside a directory source's target",
+			name: "files: a file that a directory item copies too",
 			machine: `
 os = "fedora"
 
@@ -330,8 +359,19 @@ items.nvim = { source = "files/nvim/", target = "~/.config/nvim" }
 items.init = { source = "files/nvim/init.lua", target = "~/.config/nvim/init.lua" }
 `,
 			want: []string{
-				`machines/box.toml:6:57: files.items.init.target (~/.config/nvim/init.lua) is inside files.items.nvim.target (~/.config/nvim/) on machine "box": only one of them can write it`,
+				`machines/box.toml:5:49: files.items.init.target and files.items.nvim.target both write ~/.config/nvim/init.lua on machine "box"`,
 			},
+		},
+		{
+			name: "files: a file in a directory item's target that its source doesn't have",
+			machine: `
+os = "fedora"
+
+[files]
+enabled = true
+items.nvim = { source = "files/nvim/", target = "~/.config/nvim/" }
+items.lazy = { source = "files/gitconfig.tmpl", target = "~/.config/nvim/lazy-lock.json" }
+`,
 		},
 
 		// shell
@@ -487,6 +527,20 @@ items.bashrc = { source = "files/gitconfig.tmpl", target = "~/.bashrc" }
 `,
 		},
 		{
+			name: "shell and files: files can copy a directory into fish's folder",
+			machine: `
+os = "fedora"
+
+[shell]
+enabled = true
+fish.enabled = true
+
+[files]
+enabled = true
+items.fish = { source = "files/fish/", target = "~/.config/fish/" }
+`,
+		},
+		{
 			name: "shell and files both write fish's environment file",
 			machine: `
 os = "fedora"
@@ -497,10 +551,10 @@ fish.enabled = true
 
 [files]
 enabled = true
-items.fish = { source = "files/nvim/", target = "~/.config/fish/" }
+items.fish = { source = "files/fish-env/", target = "~/.config/fish/" }
 `,
 			want: []string{
-				`machines/box.toml:5:16: shell.fish.enabled (~/.config/fish/conf.d/maisys.fish) is inside files.items.fish.target (~/.config/fish/) on machine "box": only one of them can write it`,
+				`machines/box.toml:5:16: files.items.fish.target and shell.fish.enabled both write ~/.config/fish/conf.d/maisys.fish on machine "box"`,
 			},
 		},
 

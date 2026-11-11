@@ -30,7 +30,7 @@ func (c *Config) Check(check *config.Check) {
 		}
 		key := config.JoinKey("items", name)
 		checkSource(check, key, item)
-		checkTarget(check, key, item.Target)
+		checkTarget(check, key, item)
 		if item.Mode != "" && !modePattern.MatchString(item.Mode) {
 			check.Errorf(key+".mode", "must be 3 or 4 octal digits, such as \"0600\", not %q", item.Mode)
 		}
@@ -68,45 +68,58 @@ func checkSource(check *config.Check, key string, item Item) {
 	}
 }
 
-func checkTarget(check *config.Check, key, target string) {
-	if target == "" {
+func checkTarget(check *config.Check, key string, item Item) {
+	if item.Target == "" {
 		check.Errorf(key, "has no target: set it to a path in your home folder, such as \"~/.gitconfig\"")
 		return
 	}
-	if problem := targetProblem(target); problem != "" {
+	if problem := targetProblem(item); problem != "" {
 		check.Errorf(key+".target", "%s", problem)
 	}
 }
 
-// targetProblem describes what's wrong with target, or returns "" if it's
-// a path inside your home folder.
-func targetProblem(target string) string {
+// targetProblem describes what's wrong with the item's target, or returns
+// "" if it's a path inside your home folder, or for a directory, the home
+// folder itself.
+func targetProblem(item Item) string {
+	target := item.Target
 	rest, ok := strings.CutPrefix(target, "~/")
 	if !ok {
 		return fmt.Sprintf("must start with ~/, because files only go in your home folder, not %q", target)
 	}
 	// On Windows a backslash separates folders too.
 	clean := path.Clean(strings.ReplaceAll(rest, `\`, "/"))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+	switch {
+	case clean == "." && item.isDir():
+	case clean == ".":
+		return fmt.Sprintf("must be a path inside your home folder, such as \"~/.gitconfig\", not %q: only a directory can be copied into ~/ itself", target)
+	case clean == ".." || strings.HasPrefix(clean, "../"):
 		return fmt.Sprintf("must be a path inside your home folder, not %q", target)
+	default:
 	}
 	return ""
 }
 
+// isDir reports whether the item copies a directory.
+func (i *Item) isDir() bool {
+	return strings.HasSuffix(i.Source, "/")
+}
+
 // Targets returns the target of every enabled item, leaving out targets
-// that aren't valid, which Check reports. Directories end in /.
+// that aren't valid, which Check reports. A directory claims only the
+// files its source has.
 func (c *Config) Targets(*config.Machine) []config.Target {
 	var targets []config.Target
 	for _, name := range slices.Sorted(maps.Keys(c.Items)) {
 		item := c.Items[name]
-		if !item.Enabled || item.Target == "" || targetProblem(item.Target) != "" {
+		if !item.Enabled || item.Target == "" || targetProblem(item) != "" {
 			continue
 		}
-		target := item.Target
-		if strings.HasSuffix(item.Source, "/") && !strings.HasSuffix(target, "/") {
-			target += "/"
+		t := config.Target{Path: item.Target, Key: config.JoinKey("files", "items", name, "target")}
+		if item.isDir() {
+			t.Source = item.Source
 		}
-		targets = append(targets, config.Target{Path: target, Key: config.JoinKey("files", "items", name, "target")})
+		targets = append(targets, t)
 	}
 	return targets
 }

@@ -20,7 +20,7 @@ func Docs() config.Docs {
 		"github.com/plombardi89/maisys2/internal/modules/files.Item.Enabled":                  "Enabled copies the item. Items are on unless turned off.",
 		"github.com/plombardi89/maisys2/internal/modules/files.Item.Mode":                     "Mode sets the permissions, such as \"0600\". Without it, files keep\nthe executable bit they have in the config repo.",
 		"github.com/plombardi89/maisys2/internal/modules/files.Item.Source":                   "Source is the path in the config repo. A directory is copied file by\nfile, and files in the target directory that don't come from it are\nleft alone.",
-		"github.com/plombardi89/maisys2/internal/modules/files.Item.Target":                   "Target is where the item goes, inside your home folder, such as\n\"~/.gitconfig\". On Windows, ~ is %USERPROFILE%.",
+		"github.com/plombardi89/maisys2/internal/modules/files.Item.Target":                   "Target is where the item goes, inside your home folder, such as\n\"~/.gitconfig\". A directory can also go in \"~/\" itself. On Windows,\n~ is %USERPROFILE%.",
 		"github.com/plombardi89/maisys2/internal/modules/files.Item.Template":                 "Template renders the source as a Go text/template, which can use\n.Vars, .Facts and .Machine.",
 		"github.com/plombardi89/maisys2/internal/modules/golang.Config":                       "Config is the golang module's config.",
 		"github.com/plombardi89/maisys2/internal/modules/golang.Config.Tools":                 "Tools lists Go programs to install with go install, as a package\npath and a version, such as \"mvdan.cc/gofumpt@latest\". A program is\nonly reinstalled when a newer version exists.",

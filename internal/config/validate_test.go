@@ -40,6 +40,27 @@ func (c *writerConfig) Targets(*config.Machine) []config.Target {
 	return targets
 }
 
+// copierConfig copies folders of the config repo file by file, as the
+// files module does.
+type copierConfig struct {
+	config.Toggle
+	Dirs map[string]copyDir `toml:"dirs"`
+}
+
+type copyDir struct {
+	Source string `toml:"source"`
+	Target string `toml:"target"`
+}
+
+func (c *copierConfig) Targets(*config.Machine) []config.Target {
+	var targets []config.Target
+	for _, k := range slices.Sorted(maps.Keys(c.Dirs)) {
+		d := c.Dirs[k]
+		targets = append(targets, config.Target{Path: d.Target, Source: d.Source, Key: config.JoinKey("copier", "dirs", k, "target")})
+	}
+	return targets
+}
+
 // checkedConfig has rules of its own.
 type checkedConfig struct {
 	config.Toggle
@@ -90,6 +111,10 @@ func validationModules() []config.Module {
 		fakeModule{
 			info:      config.ModuleInfo{Name: "checked", OS: all},
 			newConfig: func() config.ModuleConfig { return &checkedConfig{} },
+		},
+		fakeModule{
+			info:      config.ModuleInfo{Name: "copier", OS: all},
+			newConfig: func() config.ModuleConfig { return &copierConfig{} },
 		},
 	}
 }
@@ -340,6 +365,109 @@ paths.b = "~/.config/nvim2"
 paths.c = "~/.ssh"
 paths.d = "~/.ssh/config"
 `)},
+		},
+		{
+			name: "a directory copied from the config repo only claims its files",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`
+os = "fedora"
+
+[writer]
+enabled = true
+paths.env = "~/.config/fish/conf.d/maisys.fish"
+
+[copier]
+enabled = true
+dirs.fish = { source = "src/fish/", target = "~/.config/fish/" }
+dirs.home = { source = "src/home/", target = "~/" }
+`),
+				"src/fish/config.fish":          file(""),
+				"src/fish/functions/ll.fish":    file(""),
+				"src/fish/conf.d/abbr.fish":     file(""),
+				"src/home/.config/fish/x.fish":  file(""),
+				"src/home/.config/maisys/y.txt": file(""),
+			},
+		},
+		{
+			name: "a directory copied from the config repo writes a file another module writes",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`
+os = "fedora"
+
+[writer]
+enabled = true
+paths.env = "~/.config/fish/conf.d/maisys.fish"
+
+[copier]
+enabled = true
+dirs.fish = { source = "src/fish", target = "~/.config/fish" }
+`),
+				"src/fish/config.fish":        file(""),
+				"src/fish/conf.d/maisys.fish": file(""),
+			},
+			want: []string{`machines/box.toml:9:45: writer.paths.env and copier.dirs.fish.target both write ~/.config/fish/conf.d/maisys.fish on machine "box"`},
+		},
+		{
+			name: "two directories copied from the config repo write the same files",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`
+os = "fedora"
+
+[copier]
+enabled = true
+dirs.a = { source = "src/a/", target = "~/.config/" }
+dirs.b = { source = "src/b/", target = "~/.config/nvim/" }
+dirs.c = { source = "src/c/", target = "~/.config/nvim/lua/" }
+`),
+				"src/a/nvim/init.lua":     file(""),
+				"src/a/nvim/lua/plug.lua": file(""),
+				"src/b/init.lua":          file(""),
+				"src/b/lua/plug.lua":      file(""),
+				"src/c/other.lua":         file(""),
+			},
+			// Each pair of keys is reported once.
+			want: []string{`machines/box.toml:6:40: copier.dirs.a.target and copier.dirs.b.target both write ~/.config/nvim/init.lua on machine "box"`},
+		},
+		{
+			name: "a directory copied from the config repo inside one another module writes",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`
+os = "fedora"
+
+[writer]
+enabled = true
+paths.nvim = "~/.config/nvim/"
+
+[copier]
+enabled = true
+dirs.nvim = { source = "src/nvim/", target = "~/.config/" }
+`),
+				"src/nvim/nvim/init.lua": file(""),
+			},
+			want: []string{
+				`machines/box.toml:9:46: copier.dirs.nvim.target (~/.config/nvim/init.lua) is inside writer.paths.nvim (~/.config/nvim/) on machine "box": only one of them can write it`,
+			},
+		},
+		{
+			name: "a directory copied from a source that isn't a folder in the config repo",
+			files: fstest.MapFS{
+				"machines/box.toml": file(`
+os = "fedora"
+
+[writer]
+enabled = true
+paths.a = "~/a/x"
+
+[copier]
+enabled = true
+dirs.missing = { source = "src/missing/", target = "~/a/" }
+dirs.file = { source = "src/file/", target = "~/a/" }
+dirs.outside = { source = "../", target = "~/a/" }
+dirs.top = { source = "./", target = "~/a/" }
+`),
+				"src/file": file(""),
+				"x":        file(""),
+			},
 		},
 		{
 			name: "paths that differ in case, on Windows",

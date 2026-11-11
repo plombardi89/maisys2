@@ -98,7 +98,7 @@
                 "default": ""
               },
               "target": {
-                "description": "`target` is where the item goes, inside your home folder, such as \"~/.gitconfig\". On Windows, ~ is %USERPROFILE%.",
+                "description": "`target` is where the item goes, inside your home folder, such as \"~/.gitconfig\". A directory can also go in \"~/\" itself. On Windows, ~ is %USERPROFILE%.",
                 "type": "string",
                 "default": ""
               },

@@ -17,8 +17,15 @@ import (
 type Target struct {
 	// Path is the path in your home folder, such as "~/.zshrc". A path
 	// ending in "/" is a directory, and everything inside it belongs to the
-	// target.
+	// target, unless Source is set.
 	Path string
+	// Source, for a directory that's copied file by file from the config
+	// repo, is the folder in the repo it's copied from, such as
+	// "files/nvim/". Path is then the directory the files go in, whether
+	// or not it ends in "/", and the target only claims the files it
+	// writes: each file in Source and the folders below it, at the same
+	// place under Path. Other files in the directory belong to no one.
+	Source string
 	// Key is the dotted config path that makes the module write it, such as
 	// "shell.zsh.manage_rc". Errors about the target point at it.
 	Key string
@@ -345,7 +352,10 @@ func (v *validator) enabledAt(name string) string {
 }
 
 // ownership checks that no two targets of the enabled modules are the same
-// path, and that none is inside a directory another one writes.
+// path, and that none is inside a directory another one writes. A
+// directory copied from the config repo (a target with a Source) claims
+// each file it copies, not the whole directory. Each pair of keys is
+// reported once, at the first path they share.
 func (v *validator) ownership() {
 	m := v.m
 	type claim struct {
@@ -354,6 +364,14 @@ func (v *validator) ownership() {
 		dir   bool
 	}
 	var claims []claim
+	add := func(t Target) {
+		clean := path.Clean(t.Path)
+		if m.OS == Windows {
+			// Windows paths ignore case.
+			clean = strings.ToLower(clean)
+		}
+		claims = append(claims, claim{Target: t, clean: clean, dir: strings.HasSuffix(t.Path, "/")})
+	}
 	for _, mod := range v.repo.Modules {
 		cfg := m.Modules[mod.Info().Name]
 		targeter, ok := cfg.(Targeter)
@@ -361,17 +379,32 @@ func (v *validator) ownership() {
 			continue
 		}
 		for _, t := range targeter.Targets(m) {
-			clean := path.Clean(t.Path)
-			if m.OS == Windows {
-				// Windows paths ignore case.
-				clean = strings.ToLower(clean)
+			if t.Source == "" {
+				add(t)
+				continue
 			}
-			claims = append(claims, claim{Target: t, clean: clean, dir: strings.HasSuffix(t.Path, "/")})
+			files, err := sourceFiles(v.repo.FS, t.Source)
+			if err != nil {
+				// The module's own rules report a source that can't be
+				// read.
+				continue
+			}
+			dir := t.Path
+			if !strings.HasSuffix(dir, "/") {
+				dir += "/"
+			}
+			for _, f := range files {
+				add(Target{Path: dir + f, Key: t.Key})
+			}
 		}
 	}
 
+	reported := map[[2]string]bool{}
 	for i, b := range claims {
 		for _, a := range claims[:i] {
+			if reported[[2]string{a.Key, b.Key}] {
+				continue
+			}
 			switch {
 			case a.clean == b.clean:
 				v.errorf(v.firstWhere(b.Key, a.Key), "%s and %s both write %s on machine %q", a.Key, b.Key, b.Path, m.Name)
@@ -380,9 +413,42 @@ func (v *validator) ownership() {
 			case b.dir && inside(a.clean, b.clean):
 				v.errorf(v.firstWhere(a.Key, b.Key), "%s (%s) is inside %s (%s) on machine %q: only one of them can write it", a.Key, a.Path, b.Key, b.Path, m.Name)
 			default:
+				continue
 			}
+			reported[[2]string{a.Key, b.Key}] = true
 		}
 	}
+}
+
+// sourceFiles returns the files a directory copied from dir, a folder in
+// fsys, writes, with their paths relative to dir: every regular file in
+// dir and the folders below it, including links to files. Links to
+// folders aren't followed.
+func sourceFiles(fsys fs.FS, dir string) ([]string, error) {
+	dir = strings.TrimSuffix(dir, "/")
+	if !fs.ValidPath(dir) || dir == "." {
+		return nil, fmt.Errorf("%q isn't a folder inside the config repo", dir)
+	}
+	info, err := fs.Stat(fsys, dir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s isn't a folder", dir)
+	}
+	var files []string
+	err = fs.WalkDir(fsys, dir, func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := fs.Stat(fsys, name)
+		if err != nil || !info.Mode().IsRegular() {
+			return err
+		}
+		files = append(files, strings.TrimPrefix(name, dir+"/"))
+		return nil
+	})
+	return files, err
 }
 
 // firstWhere returns where the first of keys that a file sets was set, or
