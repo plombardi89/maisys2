@@ -37,12 +37,28 @@ const (
 	DetailName = "unit"
 	// DetailScope is "system" or "user".
 	DetailScope = "scope"
+	// DetailPending is "true" if maisys wrote the unit file while it
+	// couldn't reach systemd, until a sync that can reach it reloads
+	// systemd and restarts the unit, so it runs what the file now says.
+	DetailPending = "pending"
 )
+
+// bootedDir is there while systemd runs the system, as sd_booted(3)
+// checks. Tests replace it.
+var bootedDir = "/run/systemd/system"
 
 // Unit is a systemd unit. Its check reports a unit file to write (with the
 // file package's drift check) and a unit that isn't enabled or running.
 // Applying writes the file, reloads systemd, and enables and starts the
 // unit; a unit whose file changed is restarted.
+//
+// While maisys can't reach systemd, because it isn't running the system,
+// as in WSL until /etc/wsl.conf's [boot] systemd takes effect, or, for a
+// user unit, because this session can't reach your user manager, as under
+// podman exec, applying only writes the file. The plan says the next sync
+// that can reach systemd enables and starts the unit, and if the file
+// changed, the record says so (DetailPending), so that sync reloads
+// systemd and restarts the unit too.
 type Unit struct {
 	// Name is the unit's name, such as "x410.service".
 	Name string
@@ -102,7 +118,8 @@ func (u *Unit) describe() string {
 // running. If both are right but the state file's record of the unit file
 // is missing or out of date, the change has the record applying would
 // leave. It fails if systemctl doesn't print the unit's state, as when it
-// can't reach systemd.
+// can't reach systemd. While maisys can't reach systemd, it only compares
+// the file, and notes that the unit is enabled and started later.
 func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := u.validate(); err != nil {
 		return resource.Change{}, err
@@ -111,14 +128,26 @@ func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change
 	if err != nil {
 		return resource.Change{}, err
 	}
+	var c resource.Change
 	switch fc.Action {
 	case resource.NoChange:
 	case resource.Create:
-		return resource.Change{Action: resource.Create, Summary: u.describe()}, nil
+		c = resource.Change{Action: resource.Create, Summary: u.describe()}
 	case resource.Update:
-		return resource.Change{Action: resource.Update, Summary: u.describe() + " (update the unit file)"}, nil
+		c = resource.Change{Action: resource.Update, Summary: u.describe() + " (update the unit file)"}
 	default:
-		return fc, nil
+		c = fc
+	}
+	if when := waiting(u.User); when != "" {
+		c.Notes = append(c.Notes, when+" enables and starts "+u.Name)
+		if fc.Record != nil {
+			u.details(fc.Record, u.pending(rt))
+			c.Record = fc.Record
+		}
+		return c, nil
+	}
+	if fc.Action != resource.NoChange {
+		return c, nil
 	}
 
 	enabled, active, err := u.status(ctx, rt.Runner)
@@ -133,23 +162,40 @@ func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change
 		todo = "enable"
 	case !active:
 		todo = "start"
+	case u.pending(rt):
+		todo = "restart with its new unit file"
 	default:
 		if fc.Record != nil {
-			u.details(fc.Record)
+			u.details(fc.Record, false)
 		}
 		return resource.Change{Record: fc.Record}, nil
 	}
 	return resource.Change{Action: resource.Update, Summary: u.describe() + " (" + todo + ")"}, nil
 }
 
-// details adds the unit's name and scope to rec, its file's record.
-func (u *Unit) details(rec *state.Record) {
+// details adds the unit's name and scope to rec, its file's record, and
+// whether systemd is still to be told about the file.
+func (u *Unit) details(rec *state.Record, pending bool) {
 	rec.Details[DetailName] = u.Name
 	rec.Details[DetailScope] = scope(u.User)
+	if pending {
+		rec.Details[DetailPending] = "true"
+	}
+}
+
+// pending reports whether the state file's record says systemd is still
+// to be told about the unit file maisys wrote.
+func (u *Unit) pending(rt *resource.Runtime) bool {
+	if rt.Previous == nil {
+		return false
+	}
+	rec, ok := rt.Previous(u.ID())
+	return ok && rec.Details[DetailPending] == "true"
 }
 
 // Apply writes the unit file if it needs writing, then reloads systemd
 // and enables the unit and restarts it, or else enables and starts it.
+// While maisys can't reach systemd, it only writes the file.
 func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
 	if err := u.validate(); err != nil {
 		return state.Record{}, err
@@ -163,10 +209,15 @@ func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 	if err != nil {
 		return state.Record{}, err
 	}
-	u.details(&rec)
+	reload := fc.Action != resource.NoChange || u.pending(rt)
+	if waiting(u.User) != "" {
+		u.details(&rec, reload)
+		return rec, nil
+	}
+	u.details(&rec, false)
 
 	steps := [][]string{{"enable", "--now", u.Name}}
-	if fc.Action != resource.NoChange {
+	if reload {
 		steps = [][]string{{"daemon-reload"}, {"enable", u.Name}, {"restart", u.Name}}
 	}
 	for _, args := range steps {
@@ -175,6 +226,28 @@ func (u *Unit) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 		}
 	}
 	return rec, nil
+}
+
+// waiting returns why maisys can't reach systemd to manage a unit (a user
+// unit if user is set) and which sync will, such as "systemd isn't
+// running: once it is, the next maisys sync", or "" if it can reach it.
+// systemd doesn't run the system in WSL until /etc/wsl.conf's [boot]
+// systemd takes effect, nor in most containers. systemctl --user reaches
+// your user manager at $XDG_RUNTIME_DIR/systemd/private, which a session
+// without a login, such as podman exec's, doesn't have.
+func waiting(user bool) string {
+	if info, err := os.Stat(bootedDir); err != nil || !info.IsDir() {
+		return "systemd isn't running: once it is, the next maisys sync"
+	}
+	if !user {
+		return ""
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "systemd", "private")); err == nil {
+			return ""
+		}
+	}
+	return "this session can't reach your systemd user manager: the next maisys sync run in a login session"
 }
 
 func (u *Unit) validate() error {
@@ -268,7 +341,10 @@ func systemctl(user bool, args ...string) system.Cmd {
 }
 
 // Remover stops, disables and deletes systemd units once they're taken out
-// of the config, then reloads systemd.
+// of the config, then reloads systemd. While maisys can't reach systemd
+// (see Unit), it leaves a unit, and its record, to the next sync that can:
+// deleting only the file would leave the unit enabled, or running under a
+// user manager this session can't reach, with nothing to stop it later.
 type Remover struct{}
 
 var _ resource.Remover = Remover{}
@@ -276,7 +352,8 @@ var _ resource.Remover = Remover{}
 // Kind returns "systemd-unit".
 func (Remover) Kind() string { return Kind }
 
-// CheckRemove says whether the unit rec records is still there.
+// CheckRemove says whether the unit rec records is still there, and if
+// maisys can't reach systemd to remove it, notes when it's removed.
 func (Remover) CheckRemove(_ context.Context, rt *resource.Runtime, rec state.Record) (resource.Change, error) {
 	name, user, p, err := recorded(rt, rec)
 	if err != nil {
@@ -290,6 +367,9 @@ func (Remover) CheckRemove(_ context.Context, rt *resource.Runtime, rec state.Re
 		return resource.Change{}, fmt.Errorf("reading %s: %w", rec.Paths[0], err)
 	}
 	u := Unit{Name: name, User: user}
+	if when := waiting(user); when != "" {
+		return resource.Change{Action: resource.Orphan, Summary: u.describe(), Notes: []string{when + " stops, disables and deletes " + name}}, nil
+	}
 	return resource.Change{Action: resource.Remove, Summary: u.describe(), Privileged: !user}, nil
 }
 
