@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"reflect"
 	"regexp"
+	"slices"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -55,6 +56,9 @@ type Repo struct {
 // machineKeys are the keys a machine file has besides module tables.
 var machineKeys = []string{"os", "os_version", "arch", "profiles"}
 
+// machineOnlyKeys are the machine file's own keys that profiles can't set.
+var machineOnlyKeys = []string{"os_version", "arch", "profiles"}
+
 // LoadMachine loads machines/<name>.toml and the profiles it lists, and
 // merges them on top of each module's defaults: the profiles in the order
 // listed, then the machine file. It reports every problem it finds in every
@@ -68,7 +72,7 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 		return nil, err
 	}
 
-	machineFile, err := r.readLayer(MachineFile(name), schema.machine)
+	machineFile, err := r.readLayer(MachineFile(name), schema.machine, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +108,7 @@ func (r *Repo) LoadMachine(name string) (*Machine, error) {
 			continue
 		}
 		seen[p] = true
-		l, err := r.readLayer(profileFile(p), schema.profile)
+		l, err := r.readLayer(profileFile(p), schema.profile, machineOnlyKeys)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -162,7 +166,10 @@ func stringSlice(v reflect.Value) []string {
 	return s
 }
 
-func (r *Repo) readLayer(file string, typ reflect.Type) (*layer, error) {
+// readLayer reads file into a new struct of type typ. machineOnly lists
+// the top-level keys that are errors in it, even if unknown keys are
+// ignored, because only machine files can set them.
+func (r *Repo) readLayer(file string, typ reflect.Type, machineOnly []string) (*layer, error) {
 	data, err := fs.ReadFile(r.FS, file)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%s doesn't exist", file)
@@ -171,7 +178,7 @@ func (r *Repo) readLayer(file string, typ reflect.Type) (*layer, error) {
 		return nil, err
 	}
 	v := reflect.New(typ)
-	present, err := decode(file, data, v, r.Strict)
+	present, err := decode(file, data, v, r.Strict, machineOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -182,20 +189,32 @@ func (r *Repo) readLayer(file string, typ reflect.Type) (*layer, error) {
 // struct, and returns the keys data sets. Keys the struct has no field
 // for, including keys that only differ from a field's in case, are errors
 // if strict is set. Otherwise they're ignored: they're left out of both
-// the struct and the keys returned.
-func decode(file string, data []byte, ptr reflect.Value, strict bool) (map[string]any, error) {
+// the struct and the keys returned. The top-level keys in machineOnly are
+// errors either way, because they're known keys in the wrong file.
+func decode(file string, data []byte, ptr reflect.Value, strict bool, machineOnly []string) (map[string]any, error) {
 	typ := ptr.Type().Elem()
 	var present map[string]any
 	if err := toml.Unmarshal(data, &present); err != nil {
 		return nil, decodeError(file, typ, err, nil)
 	}
-	unknown := unknownKeys(typ, present, nil)
+	var rejected, ignored []unknownKey
+	for _, u := range unknownKeys(typ, present, nil) {
+		switch {
+		case len(u.path) == 1 && slices.Contains(machineOnly, u.path[0]):
+			u.machineOnly = true
+			rejected = append(rejected, u)
+		case strict:
+			rejected = append(rejected, u)
+		default:
+			ignored = append(ignored, u)
+		}
+	}
 	doc, locs := data, (*locations)(nil)
-	if !strict && len(unknown) > 0 {
+	if len(ignored) > 0 {
 		// go-toml matches keys to fields without regard to case, so the
 		// ignored keys are removed before decoding, or "Version" would set
 		// version.
-		for _, u := range unknown {
+		for _, u := range ignored {
 			prune(present, u.path)
 		}
 		pruned, err := toml.Marshal(present)
@@ -203,13 +222,12 @@ func decode(file string, data []byte, ptr reflect.Value, strict bool) (map[strin
 			return nil, fmt.Errorf("%s: %w", file, err)
 		}
 		doc, locs = pruned, locate(data)
-		unknown = nil
 	}
 	if err := toml.Unmarshal(doc, ptr.Interface()); err != nil {
 		return nil, decodeError(file, typ, err, locs)
 	}
-	if len(unknown) > 0 {
-		return nil, unknownKeyErrors(file, data, unknown)
+	if len(rejected) > 0 {
+		return nil, unknownKeyErrors(file, data, rejected)
 	}
 	return present, nil
 }

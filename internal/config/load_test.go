@@ -407,15 +407,6 @@ enabled = true
 			},
 		},
 		{
-			name:    "machine-only keys in a profile",
-			machine: "box",
-			files: fstest.MapFS{
-				"machines/box.toml":  file(`profiles = ["base"]`),
-				"profiles/base.toml": file(`os_version = "44"`),
-			},
-			want: []string{"profiles/base.toml:1:1: unknown key os_version"},
-		},
-		{
 			name:    "a number where a string is expected",
 			machine: "box",
 			files: fstest.MapFS{"machines/box.toml": file(`
@@ -538,6 +529,45 @@ func TestUnknownKeyErrorsAreMarked(t *testing.T) {
 		_, err := loadStrict(t, fstest.MapFS{"machines/box.toml": file(doc)}, "box")
 		if !errors.Is(err, config.ErrUnknownKey) {
 			t.Errorf("errors.Is(err, ErrUnknownKey) = false for %v", err)
+		}
+	}
+}
+
+// TestMachineOnlyKeysInProfiles checks that a profile that sets a machine
+// file's own key is told so, whether or not unknown keys are ignored.
+func TestMachineOnlyKeysInProfiles(t *testing.T) {
+	files := fstest.MapFS{
+		"machines/box.toml": file(`profiles = ["p"]`),
+		"profiles/p.toml": file(`
+os = "fedora"
+arch = "amd64"
+os_version = "44"
+profiles = ["base"]
+colour = "blue"
+`),
+	}
+	for _, strict := range []bool{false, true} {
+		repo := &config.Repo{FS: files, Modules: testModules, Strict: strict}
+		_, err := repo.LoadMachine("box")
+		want := []string{
+			"profiles/p.toml:2:1: arch can only be set in a machine file",
+			"profiles/p.toml:3:1: os_version can only be set in a machine file",
+			"profiles/p.toml:4:1: profiles can only be set in a machine file",
+		}
+		if strict {
+			want = append(want, "profiles/p.toml:5:1: unknown key colour")
+		}
+		if got := errorLines(err); !slices.Equal(got, want) {
+			t.Errorf("strict %v: errors:\n%s\nwant:\n%s", strict, strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+		if !strict && errors.Is(err, config.ErrUnknownKey) {
+			t.Errorf("strict %v: errors.Is(err, ErrUnknownKey) = true, want false: the keys aren't unknown", strict)
+		}
+
+		// Profiles no machine lists are checked too.
+		repo.FS = fstest.MapFS{"machines/box.toml": file(`os = "fedora"`), "profiles/p.toml": files["profiles/p.toml"]}
+		if got := errorLines(validateAllErr(repo)); !slices.Equal(got, want) {
+			t.Errorf("strict %v: ValidateAll errors:\n%s\nwant:\n%s", strict, strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
 	}
 }

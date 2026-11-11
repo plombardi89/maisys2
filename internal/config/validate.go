@@ -174,7 +174,7 @@ func (r *Repo) ValidateAll() (warnings []string, err error) {
 	}
 	for _, name := range profiles {
 		file := profileFile(name)
-		l, err := r.readLayer(file, schema.profile)
+		l, err := r.readLayer(file, schema.profile, machineOnlyKeys)
 		if err != nil {
 			errs = append(errs, err)
 			continue

@@ -295,6 +295,15 @@ func TestConfigFailures(t *testing.T) {
 			},
 		},
 		{
+			name: "a machine file's key in a profile",
+			env:  "box",
+			files: map[string]string{
+				"machines/box.toml":   "os = \"fedora\"\nprofiles = [\"base\", \"extra\"]\n",
+				"profiles/extra.toml": "colour = \"blue\"\narch = \"amd64\"\n",
+			},
+			stderr: []string{"profiles/extra.toml:2:1: arch can only be set in a machine file\nmaisys: 1 problem found\n"},
+		},
+		{
 			name:   "a missing profile",
 			env:    "box",
 			files:  map[string]string{"machines/box.toml": "os = \"fedora\"\nprofiles = [\"base\", \"nope\"]\n"},

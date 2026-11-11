@@ -44,7 +44,7 @@ func (r *Repo) ReadMarker() (*Marker, error) {
 		return nil, err
 	}
 	mk := &Marker{}
-	present, err := decode(markerFile, data, reflect.ValueOf(mk), r.Strict)
+	present, err := decode(markerFile, data, reflect.ValueOf(mk), r.Strict, nil)
 	if err != nil {
 		return nil, err
 	}

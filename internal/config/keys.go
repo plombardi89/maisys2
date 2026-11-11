@@ -20,6 +20,8 @@ type unknownKey struct {
 	// suggest is the right spelling, when the key differs from a field's
 	// only in case.
 	suggest string
+	// machineOnly is set for a machine file's own key in a profile.
+	machineOnly bool
 }
 
 // unknownKeys compares the keys a file sets (present) with the fields of
@@ -100,7 +102,8 @@ func prune(present any, path []string) {
 }
 
 // unknownKeyErrors describes unknown keys as errors that start with
-// file:line:column, in the order they appear in the file.
+// file:line:column, in the order they appear in the file. Only those that
+// aren't a machine file's own keys wrap ErrUnknownKey.
 func unknownKeyErrors(file string, data []byte, unknown []unknownKey) error {
 	positions := keyPositions(data)
 	type located struct {
@@ -113,6 +116,10 @@ func unknownKeyErrors(file string, data []byte, unknown []unknownKey) error {
 		loc := file
 		if pos.Line > 0 {
 			loc = fmt.Sprintf("%s:%d:%d", file, pos.Line, pos.Column)
+		}
+		if u.machineOnly {
+			errs = append(errs, located{pos, fmt.Errorf("%s: %s can only be set in a machine file", loc, displayKey(u.path))})
+			continue
 		}
 		var hint string
 		if u.suggest != "" {
