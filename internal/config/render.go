@@ -14,9 +14,9 @@ import (
 const exampleWidth = 78
 
 // ExampleTOML returns the module's table as a commented-out example for
-// config init: every key at its default, with its doc above it. Tables
-// keyed by name get an entry named "example" holding their entries'
-// defaults.
+// config init: every key that isn't deprecated at its default, with its
+// doc above it. Tables keyed by name get an entry named "example" holding
+// their entries' defaults.
 //
 // Removing the leading "# " from every line gives TOML that sets every key
 // to its default, and adds the example entries.
@@ -173,10 +173,14 @@ const exampleEntry = "example"
 // keys first, then its sub-tables, because TOML needs keys to come before
 // sub-tables. Tables keyed by name that have no entries are left out,
 // unless examples is set: then every table keyed by name gets an entry
-// named "example" holding its defaults, if it doesn't have one.
+// named "example" holding its defaults, if it doesn't have one, and
+// deprecated keys are left out, so examples never set them.
 func tableLines(v reflect.Value, path []string, docs Docs, examples bool) []tomlLine {
 	var keys, tables []tomlLine
 	for _, k := range configKeys(v) {
+		if examples && k.deprecated() {
+			continue
+		}
 		keyPath := appendPath(path, k.name)
 		doc := k.doc(docs)
 		switch k.value.Kind() {

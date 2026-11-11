@@ -55,6 +55,7 @@ type jsonSchema struct {
 	ID                   string         `json:"$id,omitempty"`
 	Title                string         `json:"title,omitempty"`
 	Description          string         `json:"description,omitempty"`
+	Deprecated           bool           `json:"deprecated,omitempty"`
 	Type                 string         `json:"type,omitempty"`
 	Enum                 []string       `json:"enum,omitempty"`
 	Items                *jsonSchema    `json:"items,omitempty"`
@@ -157,6 +158,7 @@ func valueSchema(v reflect.Value, docs Docs) *jsonSchema {
 		for _, k := range configKeys(v) {
 			ks := valueSchema(k.value, docs)
 			ks.Description = k.doc(docs)
+			ks.Deprecated = k.deprecated()
 			s.Properties = append(s.Properties, jsonProperty{k.name, ks})
 		}
 		return s

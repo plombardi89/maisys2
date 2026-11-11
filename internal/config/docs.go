@@ -91,6 +91,11 @@ func (k configKey) doc(docs Docs) string {
 	return doc
 }
 
+// deprecated reports whether the key is deprecated.
+func (k configKey) deprecated() bool {
+	return k.field.Tag.Get("deprecated") != ""
+}
+
 // newEntry returns a new entry for a table keyed by name, holding its
 // type's defaults.
 func newEntry(t reflect.Type) reflect.Value {
