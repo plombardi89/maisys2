@@ -222,9 +222,11 @@ type Remover interface {
 	// Kind is the kind of resource the Remover removes.
 	Kind() string
 	// CheckRemove says what removing the thing rec records would do, as
-	// Check does for a resource: Remove, Warn (for example "left in
-	// place"), NoChange if there's nothing left to remove, or Orphan to
-	// leave it and keep its record.
+	// Check does for a resource: Remove, or Warn for a removal that needs
+	// your attention; NoChange if there's nothing to remove, which drops
+	// the record, with Notes for something left in place, such as a file
+	// changed outside maisys, so the plan says so once; or Orphan to leave
+	// it and keep its record.
 	CheckRemove(ctx context.Context, rt *Runtime, rec state.Record) (Change, error)
 	// Remove removes the thing rec records. Its record is deleted once
 	// Remove succeeds.
