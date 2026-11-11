@@ -270,8 +270,10 @@ func TestRemover(t *testing.T) {
 }
 
 func TestRebootRecommended(t *testing.T) {
-	const needsReboot = "Core libraries or services have been updated since boot-up:\n  * kernel\n  * systemd\n\n" +
+	const rebootOutput = "Core libraries or services have been updated since boot-up:\n  * kernel\n  * systemd\n\n" +
 		"Reboot is required to fully utilize these updates.\nMore information: https://access.redhat.com/solutions/27943\n"
+	const offline = "Failed to download metadata (metalink: \"https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64\") for repository \"fedora\"\n" +
+		" Librepo error: Cannot prepare internal mirrorlist: Curl error (6): Could not resolve hostname for https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64\n"
 	tests := []struct {
 		name    string
 		os      config.OS
@@ -291,8 +293,16 @@ func TestRebootRecommended(t *testing.T) {
 		{
 			name:  "fedora after a kernel upgrade",
 			os:    config.Fedora,
-			setup: func(s *testSystem) { s.on("dnf needs-restarting -r", result(1, needsReboot, "")) },
+			setup: func(s *testSystem) { s.on("dnf needs-restarting -r", result(1, rebootOutput, "")) },
 			want:  true,
+		},
+		{
+			name:  "fedora offline",
+			os:    config.Fedora,
+			setup: func(s *testSystem) { s.on("dnf needs-restarting -r", result(1, "", offline)) },
+			wantErr: "dnf needs-restarting failed with exit code 1:\n" +
+				"  Failed to download metadata (metalink: \"https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64\") for repository \"fedora\"\n" +
+				"  Librepo error: Cannot prepare internal mirrorlist: Curl error (6): Could not resolve hostname for https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64",
 		},
 		{
 			name: "fedora without the plugin",
