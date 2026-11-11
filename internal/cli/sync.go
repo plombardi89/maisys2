@@ -400,7 +400,7 @@ func (s *syncRun) apply(p *engine.Plan, store *state.Store, log *system.Log, run
 	ctx, out := s.cmd.Context(), s.cmd.OutOrStdout()
 	changes := p.HasChanges()
 	progress := &countingWriter{w: out}
-	in := engine.ApplyInput{Store: store}
+	in := engine.ApplyInput{Store: store, Out: out}
 	if changes {
 		_, _ = fmt.Fprintln(out)
 		in.Progress = progress

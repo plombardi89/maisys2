@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -678,5 +679,31 @@ func TestApplyRecheckFails(t *testing.T) {
 		"theme skipped because shell failed.\n"
 	if b.String() != want {
 		t.Errorf("Render() =\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
+// TestApplyOut checks that steps can show things on the terminal as they
+// run, and that checks can't: the runtime has no Out while planning.
+func TestApplyOut(t *testing.T) {
+	e := newTestEnv(t)
+	r := res("package:packages/jq", resource.Create, "install jq")
+	r.onCheck = func(_ context.Context, rt *resource.Runtime) (resource.Change, error) {
+		if rt.Out != nil {
+			t.Error("the plan's checks have an Out, want none")
+		}
+		return r.change, nil
+	}
+	r.onApply = func(_ context.Context, rt *resource.Runtime) (state.Record, error) {
+		_, _ = io.WriteString(rt.Out, "maisys: waiting for another program to finish with apt\n")
+		return state.Record{}, nil
+	}
+	e.add("packages", nil, r)
+
+	var out bytes.Buffer
+	if res := Apply(t.Context(), e.plan(), ApplyInput{Store: e.store, Out: &out}); !res.OK() {
+		t.Fatalf("Apply() = %+v, want everything applied", res)
+	}
+	if want := "maisys: waiting for another program to finish with apt\n"; out.String() != want {
+		t.Errorf("the terminal got %q, want %q", out.String(), want)
 	}
 }

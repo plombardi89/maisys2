@@ -141,6 +141,11 @@ type Runtime struct {
 	Previous func(id string) (state.Record, bool)
 	// Log receives notes for the run's log. It may be nil.
 	Log io.Writer
+	// Out is the terminal, for what a step shows you as it runs, such as
+	// the first sync inside a new WSL distro, and what's shown only once,
+	// such as its user's password. It's never the log. It's nil while
+	// planning, and may be nil while applying.
+	Out io.Writer
 	// Now returns the current time.
 	Now func() time.Time
 

@@ -164,14 +164,15 @@ func NewManager(r system.Runner, f *facts.System) (*Manager, error) {
 }
 
 // ManagerFor returns the Manager the resources of rt's sync share, which
-// tells the user what it's waiting for through rt.Log.
+// tells the user what it's waiting for, or what went wrong that it carries
+// on from, in rt.Log and, while the plan is applied, on rt.Out.
 func ManagerFor(rt *resource.Runtime) (*Manager, error) {
 	v, err := rt.Shared(managerKey{}, func() (any, error) {
 		m, err := NewManager(rt.Runner, rt.Facts)
 		if err != nil {
 			return nil, err
 		}
-		m.Notify = rt.Log
+		m.Notify = runtimeNotes{rt}
 		if rt.Now != nil {
 			m.now = rt.Now
 		}
@@ -186,6 +187,21 @@ func ManagerFor(rt *resource.Runtime) (*Manager, error) {
 
 // managerKey is the key of the shared Manager.
 type managerKey struct{}
+
+// runtimeNotes writes a Manager's messages to the run's log, and to the
+// terminal once it's set, which it is while the plan is applied.
+type runtimeNotes struct {
+	rt *resource.Runtime
+}
+
+func (w runtimeNotes) Write(p []byte) (int, error) {
+	for _, out := range []io.Writer{w.rt.Log, w.rt.Out} {
+		if out != nil {
+			_, _ = out.Write(p)
+		}
+	}
+	return len(p), nil
+}
 
 // String names the package manager, "apt" or "dnf".
 func (m *Manager) String() string {
