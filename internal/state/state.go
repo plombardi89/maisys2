@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/plombardi89/maisys2/internal/fsutil"
 )
 
 // FormatVersion is the state file format this maisys reads and writes.
@@ -435,5 +437,5 @@ func writeFile(name string, data []byte) (err error) {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), name)
+	return fsutil.Rename(f.Name(), name)
 }

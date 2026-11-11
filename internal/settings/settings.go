@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/plombardi89/maisys2/internal/fsutil"
 )
 
 // FormatVersion is the settings file format this maisys reads and writes.
@@ -204,7 +206,7 @@ func writeFile(name string, data []byte) (err error) {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), name)
+	return fsutil.Rename(f.Name(), name)
 }
 
 func decodeStrict(data []byte, s *Settings) error {

@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/plombardi89/maisys2/internal/fsutil"
 )
 
 // Load reads the cache file at path into v, which must have a
@@ -76,5 +78,5 @@ func Save(path string, v any) (err error) {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return fsutil.Rename(f.Name(), path)
 }
