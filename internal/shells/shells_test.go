@@ -254,11 +254,12 @@ func lookShell(t *testing.T, shell string) string {
 
 // TestSource runs each installed shell with its environment file, sourced
 // twice, and checks what it sets: PATH has each folder once, in order, in
-// front of what it had; variables hold their values; and init steps run in
-// order, with those marked Last at the end.
+// front of what it had, and nothing else if it was empty; variables hold
+// their values; and init steps run in order, with those marked Last at the
+// end.
 func TestSource(t *testing.T) {
 	env := shells.Env{
-		Path: []string{"~/.local/bin", "$GOPATH/bin", "/usr/bin"},
+		Path: []string{"~/.local/bin", "$GOPATH/bin", "/usr/bin", "$HOME/.local/bin"},
 		Variables: []shells.Variable{
 			{Name: "GOPATH", Value: "~/go"},
 			{Name: "TRICKY", Value: "say \"hi\" to ${GOPATH}s, it costs $5 \\ `id` $(id) 'q' [1] ~/x"},
@@ -269,44 +270,63 @@ func TestSource(t *testing.T) {
 			{Name: "second", Bash: "STEPS=${STEPS}b", Zsh: "STEPS=${STEPS}b", Fish: "set -g STEPS {$STEPS}b"},
 		},
 	}
+	paths := []struct {
+		name, path string
+		want       func(home string) string
+	}{
+		{
+			name: "PATH",
+			path: "/usr/local/bin:/bin",
+			want: func(home string) string { return home + "/.local/bin:" + home + "/go/bin:/usr/bin:/usr/local/bin:/bin" },
+		},
+		{
+			name: "empty PATH",
+			want: func(home string) string { return home + "/.local/bin:" + home + "/go/bin:/usr/bin" },
+		},
+	}
 	for _, sh := range shells.All() {
-		t.Run(sh.Name(), func(t *testing.T) {
-			bin := lookShell(t, sh.Name())
-			if bin == "" {
-				t.Skipf("%s isn't installed", sh.Name())
-			}
-			home := t.TempDir()
-			data, _ := sh.RenderEnv(shells.Config{Env: env, ManageRC: true})
-			file := filepath.Join(home, "env")
-			if err := os.WriteFile(file, data, 0o644); err != nil {
-				t.Fatal(err)
-			}
+		for _, p := range paths {
+			t.Run(sh.Name()+"/"+p.name, func(t *testing.T) {
+				bin := lookShell(t, sh.Name())
+				if bin == "" {
+					t.Skipf("%s isn't installed", sh.Name())
+				}
+				home := t.TempDir()
+				data, _ := sh.RenderEnv(shells.Config{Env: env, ManageRC: true})
+				file := filepath.Join(home, "env")
+				if err := os.WriteFile(file, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
 
-			var cmd *exec.Cmd
-			switch sh.Name() {
-			case "fish":
-				script := "source '" + file + "'; source '" + file + "'; string join : $PATH; echo $TRICKY; echo $STEPS"
-				cmd = exec.CommandContext(t.Context(), bin, "--no-config", "-c", script)
-			case "zsh":
-				script := `source "$1"; source "$1"; printf '%s\n' "$PATH" "$TRICKY" "$STEPS"`
-				cmd = exec.CommandContext(t.Context(), bin, "-f", "-c", script, "zsh", file)
-			default:
-				script := `source "$1"; source "$1"; printf '%s\n' "$PATH" "$TRICKY" "$STEPS"`
-				cmd = exec.CommandContext(t.Context(), bin, "--norc", "--noprofile", "-c", script, "bash", file)
-			}
-			cmd.Env = []string{"HOME=" + home, "PATH=/usr/local/bin:/bin", "STEPS="}
-			out, err := cmd.Output()
-			if err != nil {
-				t.Fatalf("%s: %v\n%s", sh.Name(), err, out)
-			}
-			want := strings.Join([]string{
-				home + "/.local/bin:" + home + "/go/bin:/usr/bin:/usr/local/bin:/bin",
-				"say \"hi\" to " + home + "/gos, it costs $5 \\ `id` $(id) 'q' [1] ~/x",
-				"abcabc",
-			}, "\n") + "\n"
-			if string(out) != want {
-				t.Errorf("%s printed:\n%s\nwant:\n%s", sh.Name(), out, want)
-			}
-		})
+				var cmd *exec.Cmd
+				switch sh.Name() {
+				case "fish":
+					// fish changes an empty PATH it starts with (fish 4
+					// makes it "."), so the script sets PATH itself.
+					script := "set -gx PATH (string split -n : -- $START); source '" + file + "'; source '" + file + "'; " +
+						"string join : $PATH; echo $TRICKY; echo $STEPS"
+					cmd = exec.CommandContext(t.Context(), bin, "--no-config", "-c", script)
+				case "zsh":
+					script := `source "$1"; source "$1"; printf '%s\n' "$PATH" "$TRICKY" "$STEPS"`
+					cmd = exec.CommandContext(t.Context(), bin, "-f", "-c", script, "zsh", file)
+				default:
+					script := `source "$1"; source "$1"; printf '%s\n' "$PATH" "$TRICKY" "$STEPS"`
+					cmd = exec.CommandContext(t.Context(), bin, "--norc", "--noprofile", "-c", script, "bash", file)
+				}
+				cmd.Env = []string{"HOME=" + home, "PATH=" + p.path, "START=" + p.path, "STEPS="}
+				out, err := cmd.Output()
+				if err != nil {
+					t.Fatalf("%s: %v\n%s", sh.Name(), err, out)
+				}
+				want := strings.Join([]string{
+					p.want(home),
+					"say \"hi\" to " + home + "/gos, it costs $5 \\ `id` $(id) 'q' [1] ~/x",
+					"abcabc",
+				}, "\n") + "\n"
+				if string(out) != want {
+					t.Errorf("%s printed:\n%s\nwant:\n%s", sh.Name(), out, want)
+				}
+			})
+		}
 	}
 }

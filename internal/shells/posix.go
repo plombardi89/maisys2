@@ -136,7 +136,8 @@ func (p posix) before(w *writer, cfg Config) {
 // environment writes env: its variables, its folders at the front of
 // PATH, and its init steps, leaving out and warning about those without a
 // version for the shell. The folders are added only if PATH doesn't have
-// them yet, so sourcing the file again changes nothing.
+// them yet, so sourcing the file again changes nothing, and an empty PATH
+// becomes just the folders: a trailing colon would add the current folder.
 func (p posix) environment(w *writer, env Env) []Warning {
 	if len(env.Variables) > 0 {
 		w.section("Variables")
@@ -153,12 +154,15 @@ func (p posix) environment(w *writer, env Env) []Warning {
 		w.lines(
 			"__maisys_path=",
 			"for __maisys_dir in "+strings.Join(dirs, " ")+"; do",
-			`	case ":${__maisys_path}${PATH}:" in`,
+			`	case ":${__maisys_path}:${PATH}:" in`,
 			`	*":${__maisys_dir}:"*) ;;`,
-			`	*) __maisys_path="${__maisys_path}${__maisys_dir}:" ;;`,
+			`	*) __maisys_path="${__maisys_path:+${__maisys_path}:}${__maisys_dir}" ;;`,
 			"	esac",
 			"done",
-			`export PATH="${__maisys_path}${PATH}"`,
+			`if [ -n "${__maisys_path}" ]; then`,
+			`	PATH="${__maisys_path}${PATH:+:${PATH}}"`,
+			"fi",
+			"export PATH",
 			"unset __maisys_dir __maisys_path",
 		)
 	}
