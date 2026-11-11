@@ -709,8 +709,8 @@ items.wslconfig = { source = "files/gitconfig.tmpl", target = "~/.wslconfig" }
 }
 
 // TestWSLHostConfigURL checks wsl_host.config_url against the config repo's
-// URL: new distros clone config_url if it's set, and the config repo's own
-// URL otherwise, over HTTPS.
+// URL: new distros clone config_url if it's set, and otherwise the config
+// repo's own URL, over HTTPS, or from a folder on the Windows machine.
 func TestWSLHostConfigURL(t *testing.T) {
 	const (
 		required = "machines/box.toml:3:2: wsl_host.config_url is required, because this machine clones the config repo "
@@ -737,11 +737,12 @@ func TestWSLHostConfigURL(t *testing.T) {
 		{name: "an SSH URL", url: "git@github.com:me/config.git", want: required + "over SSH (git@github.com:me/config.git)" + overHTTP},
 		{name: "an SSH URL with an alias", url: "github-work:org/config.git", want: required + "over SSH (github-work:org/config.git)" + overHTTP},
 		{name: "an ssh:// URL", url: "ssh://git@example.com:2222/me/config.git", want: required + "over SSH (ssh://xxxxx@example.com:2222/me/config.git)" + overHTTP},
-		{name: "an HTTP URL", url: "http://me:s3cret@example.com/config.git", want: required + "from http://xxxxx@example.com/config.git, which isn't an HTTPS URL" + overHTTP},
-		{name: "an HTTPS URL without a host", url: "https:///config.git", want: required + "from https:///config.git, which isn't an HTTPS URL" + overHTTP},
-		{name: "a file URL", url: "file:///srv/git/config.git", want: required + "from file:///srv/git/config.git, which isn't an HTTPS URL" + overHTTP},
-		{name: "a folder", url: "/srv/git/config.git", want: required + "from /srv/git/config.git, which isn't an HTTPS URL" + overHTTP},
-		{name: "a Windows folder", url: `C:\Users\me\config.git`, want: required + `from C:\Users\me\config.git, which isn't an HTTPS URL` + overHTTP},
+		{name: "an HTTP URL", url: "http://me:s3cret@example.com/config.git", want: required + "from http://xxxxx@example.com/config.git, which isn't an HTTPS URL or a folder on this machine" + overHTTP},
+		{name: "an HTTPS URL without a host", url: "https:///config.git", want: required + "from https:///config.git, which isn't an HTTPS URL or a folder on this machine" + overHTTP},
+		{name: "a folder", url: "/srv/git/config.git", want: required + "from /srv/git/config.git, which isn't an HTTPS URL or a folder on this machine" + overHTTP},
+		{name: "a file URL", url: "file:///D:/a/config.git"},
+		{name: "a Windows folder", url: `C:\Users\me\config.git`},
+		{name: "a Windows folder with slashes", url: `D:/a/config.git`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

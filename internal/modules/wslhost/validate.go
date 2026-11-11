@@ -74,20 +74,36 @@ func (c *Config) Check(check *config.Check) {
 			check.Errorf("default_distro", "is %q, which isn't one of wsl_host.distros", c.DefaultDistro)
 		}
 	}
-	// New distros clone config_url, or else this machine's config URL, over
-	// HTTPS. That URL may not be known: then there's nothing to check.
+	// New distros clone config_url, or else this machine's config URL: over
+	// HTTPS, or from a folder on this machine through WSL's /mnt. That URL
+	// may not be known: then there's nothing to check.
 	switch repoURL := check.Repo.URL; {
 	case c.ConfigURL != "" && !gitrepo.IsHTTPS(c.ConfigURL):
 		check.Errorf("config_url", "must be an HTTPS URL, not %q", gitrepo.Redact(c.ConfigURL))
-	case c.ConfigURL != "" || len(c.Distros) == 0 || repoURL == "" || gitrepo.IsHTTPS(repoURL):
+	case c.ConfigURL != "" || len(c.Distros) == 0 || repoURL == "" || gitrepo.IsHTTPS(repoURL) || isLocal(repoURL):
 	case gitrepo.IsSSH(repoURL):
 		check.Errorf("config_url", "is required, because this machine clones the config repo over SSH (%s), and new distros clone it over HTTPS", gitrepo.Redact(repoURL))
 	default:
-		check.Errorf("config_url", "is required, because this machine clones the config repo from %s, which isn't an HTTPS URL, and new distros clone it over HTTPS", gitrepo.Redact(repoURL))
+		check.Errorf("config_url", "is required, because this machine clones the config repo from %s, which isn't an HTTPS URL or a folder on this machine, and new distros clone it over HTTPS", gitrepo.Redact(repoURL))
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Distros)) {
 		checkDistro(check, name, c.Distros[name])
 	}
+}
+
+// isLocal reports whether rawURL is a folder on a Windows machine, as a
+// path with a drive letter or a file:// URL, which new distros can reach
+// through WSL's /mnt.
+func isLocal(rawURL string) bool {
+	if len(rawURL) >= 3 && rawURL[1] == ':' && isLetter(rawURL[0]) && (rawURL[2] == '\\' || rawURL[2] == '/') {
+		return true
+	}
+	u, err := url.Parse(rawURL)
+	return err == nil && strings.EqualFold(u.Scheme, "file")
+}
+
+func isLetter(b byte) bool {
+	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
 }
 
 func checkDistro(check *config.Check, name string, d Distro) {
