@@ -187,7 +187,10 @@ type Resource interface {
 	// once it's taken out of the config (see Remover).
 	Kind() string
 	// Targets are the paths the resource owns, used for the ownership
-	// check. They're recorded as the record's Paths unless Apply sets them.
+	// check: absolute, or "~/..." in the home folder. They're recorded as
+	// the record's Paths unless Apply sets them. Once a resource is
+	// applied, the resources after it whose targets are inside its own are
+	// checked again (see Check).
 	Targets() []string
 	// Privileged reports whether applying the resource needs root on
 	// Linux (sudo), or admin on Windows.
@@ -197,7 +200,9 @@ type Resource interface {
 	// resources' checks. If it can't check without root while sudo needs
 	// a password, it returns an error wrapping system.ErrNeedsPassword (as
 	// the Runner does), or a change with Action Unknown, and the plan says
-	// it's checked during apply.
+	// it's checked during apply. It's run again while the plan is applied,
+	// just before the resource is reached, if a resource applied before it
+	// owns a folder one of its targets is in.
 	Check(ctx context.Context, rt *Runtime) (Change, error)
 	// Apply makes the change Check found, or, if Check's change was
 	// Unknown, checks again and makes whatever change is needed. It's

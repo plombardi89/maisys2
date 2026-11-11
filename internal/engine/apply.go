@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -95,6 +96,13 @@ type RemovalResult struct {
 // is reached. A change of the group that fails makes its own module fail,
 // at that change.
 //
+// Applying a resource may change what's inside the folders it owns, as
+// replacing a checkout replaces the checkouts inside it, after their
+// checks ran. So a resource whose targets are inside a target of one
+// applied before it, in its module or an earlier one, is checked again
+// just before it's reached, and applied if it needs it then, as the plan's
+// changes are. A check that fails then makes its module fail.
+//
 // Cancelling ctx (on Ctrl-C) lets the step in progress finish, with a
 // context that isn't cancelled, and then stops Apply before the next step;
 // in.Abort stops the step in progress too. At the end, Apply records when
@@ -158,6 +166,9 @@ type applier struct {
 	// grouped holds the items applied with their group, with why they
 	// failed, or nil if they were applied.
 	grouped map[*Item]error
+	// applied holds the targets of the resources applied so far, as
+	// targets returns them.
+	applied []string
 	// sudoErr is why the sudo session couldn't be started, if it couldn't.
 	sudoErr error
 }
@@ -204,10 +215,21 @@ func (a *applier) modules() {
 
 // module applies the changes of the plan's module i, which hasn't failed,
 // recording what happened in mr. The records of its resources with
-// nothing to apply are brought up to date (see refresh).
+// nothing to apply are brought up to date (see refresh). A resource inside
+// a folder something applied before it owns is checked again first (see
+// inApplied).
 func (a *applier) module(i int, mr *ModuleResult) {
 	m := a.plan.Modules[i]
 	for k, item := range m.Items {
+		if a.inApplied(item) {
+			if a.done() {
+				return
+			}
+			if err := a.recheck(item); err != nil {
+				a.fail(m, k, mr, fmt.Errorf("%s: %w", item.summary(), err))
+				return
+			}
+		}
 		if !item.Change.Action.Applies() {
 			if a.refresh(m.Name, item) != nil {
 				return
@@ -238,18 +260,66 @@ func (a *applier) module(i int, mr *ModuleResult) {
 			if a.res.Err != nil {
 				return
 			}
-			mr.Err = fmt.Errorf("%s: %w", item.summary(), err)
-			a.stopped[m.Name] = m.Name
-			// Later changes applied with their group were applied all the same.
-			for _, later := range m.Items[k+1:] {
-				if err, ok := a.grouped[later]; ok && err == nil {
-					mr.Applied++
-				}
-			}
+			a.fail(m, k, mr, fmt.Errorf("%s: %w", item.summary(), err))
 			return
 		}
 		mr.Applied++
 	}
+}
+
+// fail makes module m fail at its item k with err.
+func (a *applier) fail(m *ModulePlan, k int, mr *ModuleResult, err error) {
+	mr.Err = err
+	a.stopped[m.Name] = m.Name
+	// Later changes applied with their group were applied all the same.
+	for _, later := range m.Items[k+1:] {
+		if err, ok := a.grouped[later]; ok && err == nil {
+			mr.Applied++
+		}
+	}
+}
+
+// inApplied reports whether one of item's targets is inside a folder that
+// a resource applied in this sync owns, which may have changed what the
+// item's check found: replacing a checkout, say, moves the checkouts
+// inside it aside too. Items already applied with their group aren't.
+func (a *applier) inApplied(item *Item) bool {
+	if _, ok := a.grouped[item]; ok || len(a.applied) == 0 {
+		return false
+	}
+	for _, target := range a.targets(item.Resource) {
+		for _, dir := range a.applied {
+			if rel, err := filepath.Rel(dir, target); err == nil && rel != "." && filepath.IsLocal(rel) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// recheck checks item again, and keeps the change it finds now.
+func (a *applier) recheck(item *Item) error {
+	c, err := item.Resource.Check(a.step, a.plan.rt)
+	if err != nil {
+		return fmt.Errorf("checking it again: %w", err)
+	}
+	item.Change = c
+	return nil
+}
+
+// targets returns r's targets as clean absolute paths, with "~/" expanded
+// to the home folder, leaving out those that aren't absolute paths.
+func (a *applier) targets(r resource.Resource) []string {
+	var paths []string
+	for _, t := range r.Targets() {
+		if rest, ok := strings.CutPrefix(t, "~/"); ok {
+			t = filepath.Join(a.plan.rt.Paths.Home, filepath.FromSlash(rest))
+		}
+		if t = filepath.Clean(t); filepath.IsAbs(t) {
+			paths = append(paths, t)
+		}
+	}
+	return paths
 }
 
 // needsSudo reports whether applying item needs root, which the sudo
@@ -306,6 +376,7 @@ func (a *applier) group(i, k int, first resource.Grouped) {
 		o := outcomes[n]
 		if o.Err == nil {
 			a.put(members[n].Module, item.Resource, o.Record)
+			a.applied = append(a.applied, a.targets(item.Resource)...)
 		}
 		a.grouped[item] = o.Err
 	}
@@ -329,6 +400,7 @@ func (a *applier) apply(module string, r resource.Resource) error {
 	if err != nil {
 		return err
 	}
+	a.applied = append(a.applied, a.targets(r)...)
 	a.put(module, r, rec)
 	return a.save()
 }
