@@ -48,9 +48,11 @@ const (
 var bootedDir = "/run/systemd/system"
 
 // Unit is a systemd unit. Its check reports a unit file to write (with the
-// file package's drift check) and a unit that isn't enabled or running.
-// Applying writes the file, reloads systemd, and enables and starts the
-// unit; a unit whose file changed is restarted.
+// file package's drift check) and a unit that isn't enabled or running; a
+// oneshot service without RemainAfterExit, which is inactive once it's
+// run, only needs enabling, unless it failed. Applying writes the file,
+// reloads systemd, and enables and starts the unit; a unit whose file
+// changed is restarted.
 //
 // While maisys can't reach systemd, because it isn't running the system,
 // as in WSL until /etc/wsl.conf's [boot] systemd takes effect, or, for a
@@ -150,17 +152,17 @@ func (u *Unit) Check(ctx context.Context, rt *resource.Runtime) (resource.Change
 		return c, nil
 	}
 
-	enabled, active, err := u.status(ctx, rt.Runner)
+	enabled, started, err := u.status(ctx, rt)
 	if err != nil {
 		return resource.Change{}, err
 	}
 	var todo string
 	switch {
-	case !enabled && !active:
+	case !enabled && !started:
 		todo = "enable and start"
 	case !enabled:
 		todo = "enable"
-	case !active:
+	case !started:
 		todo = "start"
 	case u.pending(rt):
 		todo = "restart with its new unit file"
@@ -268,9 +270,11 @@ var (
 	activeStates = []string{"active", "reloading", "refreshing", "inactive", "failed", "activating", "deactivating", "maintenance"}
 )
 
-// status reports whether the unit is enabled and running.
-func (u *Unit) status(ctx context.Context, r system.Runner) (enabled, active bool, err error) {
-	state, err := u.state(ctx, r, "is-enabled", unitFileStates, "enabled")
+// status reports whether the unit is enabled, and whether it's started:
+// running, or, for an enabled oneshot service (see oneshot), run without
+// failing, which leaves it inactive.
+func (u *Unit) status(ctx context.Context, rt *resource.Runtime) (enabled, started bool, err error) {
+	state, err := u.state(ctx, rt.Runner, "is-enabled", unitFileStates, "enabled")
 	if err != nil {
 		return false, false, err
 	}
@@ -281,10 +285,71 @@ func (u *Unit) status(ctx context.Context, r system.Runner) (enabled, active boo
 		enabled = true
 	}
 
-	if state, err = u.state(ctx, r, "is-active", activeStates, "active"); err != nil {
+	if state, err = u.state(ctx, rt.Runner, "is-active", activeStates, "active"); err != nil {
 		return false, false, err
 	}
-	return enabled, state == "active" || state == "reloading" || state == "refreshing", nil
+	switch state {
+	case "active", "reloading", "refreshing":
+		started = true
+	case "inactive":
+		// An enabled oneshot service ran when maisys enabled it, or at boot.
+		if enabled {
+			content, err := u.Content(rt)
+			if err != nil {
+				return false, false, err
+			}
+			started = oneshot(u.Name, content)
+		}
+	}
+	return enabled, started, nil
+}
+
+// oneshot reports whether content is the unit file of a service of Type
+// oneshot without RemainAfterExit, which is inactive again once it's run,
+// as systemd reads it: the last value of a key in [Service] counts, an
+// empty one resets it, and a service without Type or ExecStart is a
+// oneshot.
+func oneshot(name string, content []byte) bool {
+	if !strings.HasSuffix(name, ".service") {
+		return false
+	}
+	settings := serviceSettings(content)
+	typ := settings["Type"]
+	if typ == "" && settings["ExecStart"] == "" {
+		typ = "oneshot"
+	}
+	switch strings.ToLower(settings["RemainAfterExit"]) {
+	case "1", "yes", "y", "true", "t", "on":
+		return false
+	}
+	return typ == "oneshot"
+}
+
+// serviceSettings returns the last value of each key in the [Service]
+// section of the unit file content. Lines starting with # or ; are
+// comments, and a line ending with a backslash goes on in the next one.
+func serviceSettings(content []byte) map[string]string {
+	settings := map[string]string{}
+	var section, continued string
+	for line := range strings.Lines(string(content)) {
+		line = strings.TrimSpace(line)
+		if line == "" && continued == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if start, ok := strings.CutSuffix(line, `\`); ok {
+			continued += start + " "
+			continue
+		}
+		line, continued = continued+line, ""
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = line[1 : len(line)-1]
+			continue
+		}
+		if key, value, ok := strings.Cut(line, "="); ok && section == "Service" {
+			settings[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return settings
 }
 
 // state runs systemctl's verb, is-enabled or is-active, for the unit, and

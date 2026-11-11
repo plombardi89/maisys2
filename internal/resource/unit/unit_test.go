@@ -35,6 +35,9 @@ type fakeSystemd struct {
 	mu      sync.Mutex
 	enabled string // what is-enabled prints
 	active  string // what is-active prints
+	// oneshot makes the unit a oneshot service, which is inactive again
+	// once it's started.
+	oneshot bool
 	// answers, if set, answer the verbs they have instead, as systemctl
 	// does when it can't reach systemd.
 	answers map[string]system.Result
@@ -61,14 +64,22 @@ func (s *fakeSystemd) run(_ context.Context, c system.Cmd) (system.Result, error
 	case "enable":
 		s.enabled = "enabled"
 		if slices.Contains(args, "--now") {
-			s.active = "active"
+			s.start()
 		}
 	case "restart":
-		s.active = "active"
+		s.start()
 	case "disable":
 		s.enabled, s.active = "disabled", "inactive"
 	}
 	return system.Result{}, nil
+}
+
+// start starts the unit. s.mu must be held.
+func (s *fakeSystemd) start() {
+	s.active = "active"
+	if s.oneshot {
+		s.active = "inactive"
+	}
 }
 
 // env is a home folder, a folder for system units, and a fake systemd,
@@ -596,6 +607,116 @@ func TestUnitWithoutSystemd(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUnitOneshot checks a oneshot service without RemainAfterExit, which
+// is inactive again once it's run: it's done once it's enabled, so a dry
+// run after a sync has nothing to change, unless it failed. Its unit file
+// is read as systemd reads it.
+func TestUnitOneshot(t *testing.T) {
+	svc := func(settings string) string {
+		return "[Unit]\nDescription=Set up X410\n\n[Service]\n" + settings + "\n[Install]\nWantedBy=multi-user.target\n"
+	}
+	tests := []struct {
+		name    string
+		unit    string
+		enabled string
+		active  string
+		summary string // what the check says, if anything
+	}{
+		{
+			name:    "run",
+			unit:    svc("Type=oneshot\nExecStart=/usr/bin/true\n"),
+			enabled: "enabled",
+			active:  "inactive",
+		},
+		{
+			name:    "failed",
+			unit:    svc("Type=oneshot\nExecStart=/usr/bin/false\n"),
+			enabled: "enabled",
+			active:  "failed",
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "disabled",
+			unit:    svc("Type=oneshot\nExecStart=/usr/bin/true\n"),
+			enabled: "disabled",
+			active:  "inactive",
+			summary: "systemd unit x410.service (enable and start)",
+		},
+		{
+			name:    "remains after it's run",
+			unit:    svc("Type=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/true\n"),
+			enabled: "enabled",
+			active:  "inactive",
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "remains after it's run, spelt differently",
+			unit:    svc("Type = oneshot\nRemainAfterExit = On\nExecStart=/usr/bin/true\n"),
+			enabled: "enabled",
+			active:  "inactive",
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "a oneshot without a type",
+			unit:    svc("ExecStop=/usr/bin/true\n"),
+			enabled: "enabled",
+			active:  "inactive",
+		},
+		{
+			name:    "type set again",
+			unit:    svc("Type=oneshot\nType=simple\nExecStart=/usr/bin/sleep infinity\n"),
+			enabled: "enabled",
+			active:  "inactive",
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "type reset",
+			unit:    svc("Type=oneshot\nType=\nExecStart=/usr/bin/sleep infinity\n"),
+			enabled: "enabled",
+			active:  "inactive",
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "a type outside [Service]",
+			unit:    "[Unit]\nType=oneshot\n" + svc("ExecStart=/usr/bin/sleep infinity\n"),
+			enabled: "enabled",
+			active:  "inactive",
+			summary: "systemd unit x410.service (start)",
+		},
+		{
+			name:    "comments and continued lines",
+			unit:    svc("# Type=simple\nType=oneshot\n; RemainAfterExit=yes\nExecStart=/usr/bin/sh -c \\\n  'echo \\\n# a comment\nType=simple'\n"),
+			enabled: "enabled",
+			active:  "inactive",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.apply(e.unit(tt.unit))
+			e.systemd.enabled, e.systemd.active = tt.enabled, tt.active
+			c := e.check(e.unit(tt.unit))
+			if c.Summary != tt.summary || (c.Action == resource.NoChange) != (tt.summary == "") {
+				t.Errorf("Check() = %s %q, want %q", c.Action, c.Summary, tt.summary)
+			}
+		})
+	}
+
+	t.Run("a dry run after a sync", func(t *testing.T) {
+		e := newEnv(t)
+		e.systemd.oneshot = true
+		u := e.unit(svc("Type=oneshot\nExecStart=/usr/bin/true\n"))
+		c, cmds := e.sync(u)
+		if want := []string{"install", "systemctl daemon-reload", "systemctl enable x410.service", "systemctl restart x410.service"}; c.Action != resource.Create ||
+			len(cmds) != 4 || !strings.HasPrefix(cmds[0], "install ") || !slices.Equal(cmds[1:], want[1:]) {
+			t.Errorf("sync = %s %q, ran %q; want the unit created, and %q", c.Action, c.Summary, cmds, want)
+		}
+		if c := e.check(u); c.Action != resource.NoChange {
+			t.Errorf("Check() after the sync = %s %q, want no change", c.Action, c.Summary)
+		}
+	})
 }
 
 // TestUnitRecord checks the record a check says a running unit should have
