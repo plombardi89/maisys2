@@ -28,16 +28,46 @@ GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 BUILDINFO := github.com/plombardi89/maisys2/internal/buildinfo
 LDFLAGS   := -s -w -X $(BUILDINFO).version=$(VERSION) -X $(BUILDINFO).commit=$(COMMIT) -X $(BUILDINFO).date=$(DATE)
 
-.PHONY: help build test lint lint-go lint-shell lint-workflows fmt generate tidy snapshot clean
+.PHONY: help build test e2e upgrade-test signin-test fixture lint lint-go lint-shell lint-workflows fmt generate tidy snapshot clean
 
 help: ## Show this help
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
 build: ## Build bin/maisys
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/maisys ./cmd/maisys
 
 test: ## Run the unit tests
 	go test ./...
+
+# The distro make e2e tests, such as fedora-44, or all of them; and the
+# scenarios it runs on each, such as drift,legacy, all of them or none
+# (test/e2e). E2E_PARALLEL scenarios run at a time.
+DISTRO       ?= all
+SCENARIO     ?= all
+E2E_PARALLEL ?= 4
+
+e2e: ## Run the end-to-end tests in podman containers: every distro and scenario, or DISTRO=fedora-44 SCENARIO=drift
+	MAISYS_E2E='$(DISTRO)' MAISYS_E2E_SCENARIOS='$(SCENARIO)' go test -count=1 -timeout 3h -v -parallel '$(E2E_PARALLEL)' -run '^TestSync$$' ./test/e2e
+
+# The upgrade test's releases (test/e2e): DRAFT is a folder of the draft
+# release's files, such as dist/ from make snapshot, and PREVIOUS the URL of
+# the previous release's files or a maisys binary (by default the latest
+# published release).
+DRAFT    ?=
+PREVIOUS ?=
+
+upgrade-test: ## Run the upgrade test: PREVIOUS updates itself to DRAFT=folder (on DISTRO, as for e2e)
+	@[ -n '$(DRAFT)' ] || { echo 'usage: make upgrade-test DRAFT=folder [PREVIOUS=release-url-or-binary] [DISTRO=fedora-44]' >&2; exit 2; }
+	MAISYS_E2E='$(DISTRO)' MAISYS_UPGRADE_DRAFT='$(abspath $(DRAFT))' \
+	MAISYS_UPGRADE_PREVIOUS='$(if $(findstring ://,$(PREVIOUS)),$(PREVIOUS),$(abspath $(PREVIOUS)))' \
+	go test -count=1 -timeout 3h -v -run '^TestUpgrade$$' ./test/e2e
+
+signin-test: ## Run the private config repo sign-in test (needs MAISYS_FIXTURE_URL and MAISYS_FIXTURE_TOKEN)
+	go test -count=1 -timeout 30m -v -run '^TestSignIn$$' ./test/signin
+
+fixture: ## Build the end-to-end tests' fixture config repo in DIR
+	@[ -n '$(DIR)' ] || { echo 'usage: make fixture DIR=folder' >&2; exit 2; }
+	go run ./test/cmd/fixture '$(DIR)'
 
 lint: lint-go lint-shell lint-workflows ## Run every linter
 

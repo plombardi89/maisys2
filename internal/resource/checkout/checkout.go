@@ -51,7 +51,8 @@ const (
 type Checkout struct {
 	// Name names the checkout in the plan, such as "aphrodite".
 	Name string
-	// Repo is the repo's URL, a public HTTPS URL.
+	// Repo is the repo's URL: any URL git can fetch from without signing
+	// in, such as a public HTTPS URL, or a file:// URL.
 	Repo string
 	// Ref is a branch, a tag, or a full or abbreviated commit hash. A name
 	// that's both a branch and a tag is the branch.
