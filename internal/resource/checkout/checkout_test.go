@@ -629,7 +629,7 @@ func TestRemover(t *testing.T) {
 
 // TestRemoverLeavesInPlace checks that what's no longer a checkout of the
 // repo maisys cloned is left in place when the checkout is taken out of
-// the config.
+// the config, with only a note in the plan.
 func TestRemoverLeavesInPlace(t *testing.T) {
 	shown := "~/.oh-my-zsh/custom/plugins/plugin"
 	// In the tests' summaries, UP is the repo's URL.
@@ -645,7 +645,7 @@ func TestRemoverLeavesInPlace(t *testing.T) {
 				t.Helper()
 				writeFile(t, filepath.Join(dir, "mine.zsh"), "mine")
 			},
-			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a git checkout any more (left in place)"},
+			want: resource.Change{Notes: []string{shown + " isn't a git checkout any more (left in place)"}},
 			kept: "mine.zsh",
 		},
 		{
@@ -654,7 +654,7 @@ func TestRemoverLeavesInPlace(t *testing.T) {
 				t.Helper()
 				writeFile(t, dir, "mine")
 			},
-			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a directory any more (left in place)"},
+			want: resource.Change{Notes: []string{shown + " isn't a directory any more (left in place)"}},
 		},
 		{
 			name: "a broken checkout",
@@ -663,7 +663,7 @@ func TestRemoverLeavesInPlace(t *testing.T) {
 				writeFile(t, filepath.Join(dir, ".git"), "gitdir: /nowhere\n")
 				writeFile(t, filepath.Join(dir, "mine.zsh"), "mine")
 			},
-			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a git checkout any more (left in place)"},
+			want: resource.Change{Notes: []string{shown + " isn't a git checkout any more (left in place)"}},
 			kept: "mine.zsh",
 		},
 		{
@@ -673,7 +673,7 @@ func TestRemoverLeavesInPlace(t *testing.T) {
 				other.commit("mine.zsh", "mine")
 				sb.git("", "clone", "--quiet", other.url, dir)
 			},
-			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a checkout of UP any more (left in place)"},
+			want: resource.Change{Notes: []string{shown + " isn't a checkout of UP any more (left in place)"}},
 			kept: "mine.zsh",
 		},
 		{
@@ -683,7 +683,7 @@ func TestRemoverLeavesInPlace(t *testing.T) {
 				sb.git("", "init", "--quiet", dir)
 				writeFile(t, filepath.Join(dir, "mine.zsh"), "mine")
 			},
-			want: resource.Change{Action: resource.Warn, Summary: shown + " isn't a checkout of UP any more (left in place)"},
+			want: resource.Change{Notes: []string{shown + " isn't a checkout of UP any more (left in place)"}},
 			kept: "mine.zsh",
 		},
 	}
@@ -706,7 +706,7 @@ func TestRemoverLeavesInPlace(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := tt.want
-			want.Summary = strings.ReplaceAll(want.Summary, "UP", up.url)
+			want.Notes = []string{strings.ReplaceAll(want.Notes[0], "UP", up.url)}
 			assertChange(t, got, want)
 			if err := r.Remove(t.Context(), sb.rt, rec); err != nil {
 				t.Fatal(err)

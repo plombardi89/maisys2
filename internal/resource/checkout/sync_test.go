@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/plombardi89/maisys2/internal/config"
 	"github.com/plombardi89/maisys2/internal/engine"
+	"github.com/plombardi89/maisys2/internal/facts"
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/state"
@@ -40,6 +42,7 @@ func (sb *sandbox) sync(store *state.Store, checkouts ...*Checkout) string {
 	machine := &config.Machine{Name: "box", OS: config.Ubuntu, Modules: map[string]config.ModuleConfig{"shell": &config.Toggle{Enabled: true}}}
 	p, err := engine.NewPlan(sb.t.Context(), engine.PlanInput{
 		Machine:  machine,
+		Facts:    &facts.System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "26.04", Arch: config.AMD64, RawArch: "amd64"},
 		Paths:    settings.Paths{Home: sb.home},
 		Runner:   sb.rt.Runner,
 		State:    store.State,
@@ -101,5 +104,42 @@ func TestSyncReplacesParent(t *testing.T) {
 
 	if got := sb.sync(store, checkouts()...); !strings.HasSuffix(got, "\nNothing to change.\n") {
 		t.Errorf("plan after the sync:\n%s\nwant nothing to change", got)
+	}
+}
+
+// TestSyncLeavesInPlace takes out of the config a plugin you've since
+// replaced with your own clone of another repo: the plan notes it's left
+// in place, once, with nothing to change, and its record is dropped.
+func TestSyncLeavesInPlace(t *testing.T) {
+	sb := newSandbox(t)
+	plugin := sb.upstream("plugin")
+	plugin.commit("plugin.zsh", "one")
+	mine := sb.upstream("mine")
+	mine.commit("plugin.zsh", "mine")
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := sb.checkout("plugin", plugin.url, "main")
+	sb.sync(store, c)
+	if err := os.RemoveAll(c.Dir); err != nil {
+		t.Fatal(err)
+	}
+	sb.git("", "clone", "--quiet", mine.url, c.Dir)
+
+	got := sb.sync(store)
+	want := "Plan for box (ubuntu 26.04, amd64)\n\n" +
+		"prune\n" +
+		"  ! ~/.oh-my-zsh/custom/plugins/plugin isn't a checkout of " + plugin.url + " any more (left in place)\n\n" +
+		"Nothing to change.\n"
+	if got != want {
+		t.Errorf("plan after taking the plugin out:\n%s\nwant:\n%s", got, want)
+	}
+	assertContent(t, filepath.Join(c.Dir, "plugin.zsh"), "mine")
+	if ids := store.IDs(); len(ids) > 0 {
+		t.Errorf("records = %q, want none", ids)
+	}
+	if got := sb.sync(store); got != "Plan for box (ubuntu 26.04, amd64)\n\nNothing to change.\n" {
+		t.Errorf("the next plan:\n%s\nwant nothing to change", got)
 	}
 }

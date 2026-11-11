@@ -18,6 +18,8 @@ import (
 // Remover deletes the checkouts taken out of the config, as the removal
 // rules say. A directory that's no longer a git checkout of the repo
 // maisys cloned, such as your own clone of another repo, is left in place.
+// That only gets a note in the plan, since nothing changes, and its record
+// is dropped, so maisys stops managing it.
 type Remover struct {
 	// Git is the git binary, used to read the checkout's origin and to
 	// warn about local changes that deleting it loses. Empty means git
@@ -33,7 +35,8 @@ var _ resource.Remover = Remover{}
 func (Remover) Kind() string { return Kind }
 
 // CheckRemove says whether the checkout rec records is still there to
-// delete, noting local changes that deleting it loses.
+// delete, noting local changes that deleting it loses, or is left in
+// place, with a note saying why.
 func (r Remover) CheckRemove(ctx context.Context, rt *resource.Runtime, rec state.Record) (resource.Change, error) {
 	dir := recordDir(rec)
 	present, why, err := r.removable(ctx, rt, rec, dir)
@@ -42,7 +45,7 @@ func (r Remover) CheckRemove(ctx context.Context, rt *resource.Runtime, rec stat
 	}
 	shown := tilde(rt.Paths.Home, dir)
 	if why != "" {
-		return resource.Change{Action: resource.Warn, Summary: fmt.Sprintf("%s %s (left in place)", shown, why)}, nil
+		return resource.Change{Notes: []string{fmt.Sprintf("%s %s (left in place)", shown, why)}}, nil
 	}
 	ch := resource.Change{Action: resource.Remove, Summary: fmt.Sprintf("%s (%s)", cmp.Or(rec.Details["name"], filepath.Base(dir)), shown)}
 	// The note is only a courtesy, so a checkout git can't read is deleted
