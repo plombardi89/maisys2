@@ -96,8 +96,9 @@ func validName(name string) bool {
 type Env struct {
 	// Client downloads files and looks up their checksums.
 	Client *download.Client
-	// Latest caches the latest versions found. Nil means they aren't
-	// cached.
+	// Latest looks up the latest versions, once per run, and keeps a dry
+	// run's for the sync that follows it. Nil means they're looked up
+	// every time.
 	Latest *version.Cache
 	// ToolsDir holds each tool's versions: ~/.local/share/maisys/tools.
 	ToolsDir string
@@ -107,6 +108,7 @@ type Env struct {
 
 // NewEnv returns the Env for the tools of a sync, with maisys's folders in
 // paths, sending userAgent (such as "maisys/0.6.0") with every request.
+// For a dry run, set Latest.DryRun.
 func NewEnv(paths settings.Paths, userAgent string) *Env {
 	return &Env{
 		Client: &download.Client{

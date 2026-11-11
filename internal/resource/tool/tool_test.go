@@ -190,6 +190,12 @@ func (m *machine) tool(u *upstream, v string) *Tool {
 	return New(u.spec(), v, m.env)
 }
 
+// newRun starts another run of maisys, a dry run or a sync, with a Cache
+// of its own for the latest versions.
+func (m *machine) newRun(dryRun bool) {
+	m.env.Latest = &version.Cache{Path: m.env.Latest.Path, DryRun: dryRun, Now: func() time.Time { return m.now }}
+}
+
 // check checks r, failing the test if that fails.
 func (m *machine) check(r *Tool) resource.Change {
 	m.t.Helper()
@@ -319,21 +325,39 @@ func TestLatest(t *testing.T) {
 	needSymlinks(t)
 	u := newUpstream(t, "1.0.0", "1.1.0")
 	m := newMachine(t, u)
-
-	wantChange(t, m.sync(m.tool(u, "latest")), resource.Create, "fake 1.1.0 (latest)")
-
-	// Within the hour, the cached version is used.
-	u.release(t, "1.2.0", "bin/fake", "bin/fakectl")
-	m.now = m.now.Add(30 * time.Minute)
-	wantChange(t, m.sync(m.tool(u, "")), resource.NoChange, "")
-	if n := u.count("/fake/fake/releases/latest"); n != 1 {
-		t.Errorf("looked up the latest version %d times, want once", n)
+	lookups := func(want int) {
+		t.Helper()
+		if n := u.count("/fake/fake/releases/latest"); n != want {
+			t.Errorf("looked up the latest version %d times, want %d", n, want)
+		}
 	}
 
-	m.now = m.now.Add(time.Hour)
+	wantChange(t, m.sync(m.tool(u, "latest")), resource.Create, "fake 1.1.0 (latest)")
+	lookups(1)
+
+	// The next run looks it up again, even minutes later.
+	u.release(t, "1.2.0", "bin/fake", "bin/fakectl")
+	m.newRun(true)
+	m.now = m.now.Add(10 * time.Minute)
+	wantChange(t, m.check(m.tool(u, "")), resource.Update, "fake 1.1.0 → 1.2.0 (latest)")
+	lookups(2)
+
+	// A sync within the hour installs what the dry run showed...
+	u.release(t, "1.3.0", "bin/fake", "bin/fakectl")
+	m.newRun(false)
+	m.now = m.now.Add(30 * time.Minute)
 	wantChange(t, m.sync(m.tool(u, "latest")), resource.Update, "fake 1.1.0 → 1.2.0 (latest)")
-	if got := m.entries(".local/share/maisys/tools/fake"); strings.Join(got, " ") != "1.2.0" {
-		t.Errorf("the tool's folder holds %q, want only 1.2.0", got)
+	lookups(2)
+	// ...checking it again with the same version, as the engine does.
+	wantChange(t, m.check(m.tool(u, "latest")), resource.NoChange, "")
+
+	// ...and the next sync looks it up again.
+	m.newRun(false)
+	m.now = m.now.Add(time.Minute)
+	wantChange(t, m.sync(m.tool(u, "latest")), resource.Update, "fake 1.2.0 → 1.3.0 (latest)")
+	lookups(3)
+	if got := m.entries(".local/share/maisys/tools/fake"); strings.Join(got, " ") != "1.3.0" {
+		t.Errorf("the tool's folder holds %q, want only 1.3.0", got)
 	}
 }
 

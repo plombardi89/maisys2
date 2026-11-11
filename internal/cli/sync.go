@@ -293,6 +293,7 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 	// Reading the caches now means one written by a newer maisys stops the
 	// sync before it plans anything.
 	tools := tool.NewEnv(s.paths, "maisys/"+buildinfo.Version())
+	tools.Latest.DryRun = s.opts.dryRun
 	if err := tools.Load(); err != nil {
 		return err
 	}

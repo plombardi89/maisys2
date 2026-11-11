@@ -1,7 +1,8 @@
 // Package version finds the newest stable version of the tools maisys
-// installs, from where each upstream publishes it, and caches what it finds
-// for an hour in ~/.cache/maisys/latest.json, so that a dry run followed by
-// a sync installs the same versions.
+// installs, from where each upstream publishes it. Every run looks each
+// version up once, and a sync uses what the dry run before it found, kept
+// for an hour in ~/.cache/maisys/latest.json, so that it installs the
+// versions the dry run showed.
 package version
 
 import (
