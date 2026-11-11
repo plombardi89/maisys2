@@ -223,6 +223,58 @@ func TestGoModuleEnvFile(t *testing.T) {
 	latest(t, s, GoModule{Path: "example.com/mod", Getenv: getenv}, "", "GOPROXY is off")
 }
 
+func TestGoModuleLookupError(t *testing.T) {
+	s := newServer(t)
+	s.handle("/fails.example/mod/@latest", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	})
+	goList := func(_ context.Context, path string) (string, error) {
+		return "", errors.New("go list -m " + path + "@latest: go isn't installed")
+	}
+	tests := []struct {
+		name    string
+		path    string
+		env     map[string]string
+		wantErr string
+	}{
+		{
+			name:    "GOPRIVATE",
+			path:    "corp.example/tool",
+			env:     map[string]string{"GOPROXY": s.URL, "GOPRIVATE": "corp.example"},
+			wantErr: "can't find the latest version of corp.example/tool from go list -m (direct): go list -m corp.example/tool@latest: go isn't installed (pin a version to stop depending on it)",
+		},
+		{
+			name:    "GOPROXY=direct",
+			path:    "corp.example/tool",
+			env:     map[string]string{"GOPROXY": "direct"},
+			wantErr: "can't find the latest version of corp.example/tool from go list -m (direct): go list -m corp.example/tool@latest: go isn't installed (pin a version to stop depending on it)",
+		},
+		{
+			name:    "not in the proxy",
+			path:    "corp.example/tool",
+			env:     map[string]string{"GOPROXY": s.URL + ",direct"},
+			wantErr: "can't find the latest version of corp.example/tool from go list -m (direct): go list -m corp.example/tool@latest: go isn't installed (pin a version to stop depending on it)",
+		},
+		{
+			name:    "the proxy fails",
+			path:    "fails.example/mod",
+			env:     map[string]string{"GOPROXY": s.URL + ",direct"},
+			wantErr: "can't find the latest version of fails.example/mod from the Go module proxy (fails.example/mod): " + s.URL + "/fails.example/mod/@latest: 503 Service Unavailable (down) (pin a version to stop depending on it)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := GoModule{Path: tt.path, Getenv: env(tt.env), Direct: goList}
+			for _, c := range []*Cache{{Path: filepath.Join(t.TempDir(), "latest.json")}, nil} {
+				_, err := c.Resolve(t.Context(), newClient(s), tt.path, g)
+				if _, ok := errors.AsType[*LookupError](err); !ok || err.Error() != tt.wantErr {
+					t.Errorf("Resolve() error = %v, want a *LookupError %q", err, tt.wantErr)
+				}
+			}
+		})
+	}
+}
+
 func TestGoModuleHidesPasswords(t *testing.T) {
 	s := newServer(t)
 	proxyURL := strings.Replace(s.URL, "://", "://me:secret@", 1)

@@ -35,8 +35,8 @@ const DefaultGoProxy = "https://proxy.golang.org,direct"
 //
 // maisys doesn't talk to version control itself: lookups that go "direct"
 // use Direct, which runs go list with the user's Go settings and
-// credentials (see GoList). Without it, they fail, saying to pin a
-// version.
+// credentials (see GoList), and a failed one names go list as where it
+// looked. Without Direct, they fail, saying to pin a version.
 type GoModule struct {
 	// Path is the program's package path, such as
 	// "golang.org/x/tools/cmd/goimports". Its module is the longest prefix
@@ -49,7 +49,8 @@ type GoModule struct {
 	Direct func(ctx context.Context, path string) (string, error)
 }
 
-// Upstream names the Go module proxy and the package.
+// Upstream names the Go module proxy and the package. A failed lookup that
+// went "direct" names go list instead.
 func (g GoModule) Upstream() string {
 	return "the Go module proxy (" + g.Path + ")"
 }
@@ -87,12 +88,20 @@ func (g GoModule) Latest(ctx context.Context, c *download.Client) (string, error
 	return "", lastErr
 }
 
+// directUpstream is where a failed lookup that went "direct" says it
+// looked.
+const directUpstream = "go list -m (direct)"
+
 // direct looks g.Path up without a proxy, for the reason given.
 func (g GoModule) direct(ctx context.Context, why string) (string, error) {
 	if g.Direct == nil {
 		return "", fmt.Errorf("maisys can only look %s up through a module proxy, and %s", g.Path, why)
 	}
-	return g.Direct(ctx, g.Path)
+	v, err := g.Direct(ctx, g.Path)
+	if err != nil {
+		return "", &upstreamError{upstream: directUpstream, err: err}
+	}
+	return v, nil
 }
 
 // notFoundError means no module provides a package.

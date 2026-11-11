@@ -1,6 +1,7 @@
 package goinstall
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,9 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/plombardi89/maisys2/internal/resource"
+	"github.com/plombardi89/maisys2/internal/resource/version"
 	"github.com/plombardi89/maisys2/internal/settings"
 	"github.com/plombardi89/maisys2/internal/state"
 	"github.com/plombardi89/maisys2/internal/system"
@@ -293,6 +296,62 @@ func TestCheckErrors(t *testing.T) {
 		if err == nil || err.Error() != tt.want {
 			t.Errorf("%s: Check() error = %v, want %q", tt.name, err, tt.want)
 		}
+	}
+}
+
+func TestCheckBeforeGoIsInstalled(t *testing.T) {
+	f := newFixture(t)
+	if err := os.Remove(f.goBin); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	f.rt.Log = &log
+	p := f.program("latest")
+	// Like go list, the lookup needs go, which the same sync installs
+	// first.
+	p.Resolve = func(_ context.Context, pkg string) (string, error) {
+		if _, err := os.Stat(f.goBin); err != nil {
+			return "", &version.LookupError{Tool: pkg, Upstream: "go list -m (direct)", Err: err}
+		}
+		return "v3.41.0", nil
+	}
+
+	c, err := p.Check(t.Context(), f.rt)
+	if err != nil {
+		t.Fatalf("Check() error = %v, want the lookup left until go is installed", err)
+	}
+	assertChange(t, c, resource.Change{Action: resource.Create, Summary: "task (latest)"})
+	if got := f.runner.Commands(); len(got) != 0 {
+		t.Errorf("Check() ran %q before go is installed", got)
+	}
+	if !strings.Contains(log.String(), "looking up the latest version once go is installed") {
+		t.Errorf("the log says %q, want why the version isn't known yet", log.String())
+	}
+
+	writeFile(t, f.goBin, "go")
+	f.runner.On(f.goBin+" install", func(context.Context, system.Cmd) (system.Result, error) {
+		writeFile(t, f.bin, "\x7fELF")
+		return system.Result{}, nil
+	})
+	rec, err := p.Apply(t.Context(), f.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goCmd := system.Cmd{Name: f.goBin}.String()
+	if got, want := f.runner.Commands(), []string{goCmd + " install " + taskPkg + "@v3.41.0", goCmd + " env GOBIN GOPATH GOEXE"}; !slices.Equal(got, want) {
+		t.Errorf("commands = %q, want %q", got, want)
+	}
+	if rec.Details["version"] != "v3.41.0" {
+		t.Errorf("Apply() recorded version %q, want v3.41.0", rec.Details["version"])
+	}
+
+	// Once go is installed, a failed lookup stops the sync as any other.
+	p = f.program("latest")
+	p.Resolve = func(context.Context, string) (string, error) {
+		return "", &version.LookupError{Tool: taskPkg, Upstream: "go list -m (direct)", Err: errors.New("exit code 1")}
+	}
+	if _, err := p.Check(t.Context(), f.rt); !resource.StopsSync(err) {
+		t.Errorf("Check() with go installed: error = %v, want one that stops the sync", err)
 	}
 }
 

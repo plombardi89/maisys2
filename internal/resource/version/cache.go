@@ -83,7 +83,7 @@ func (c *Cache) Resolve(ctx context.Context, client *download.Client, tool strin
 	if c == nil {
 		v, err := r.Latest(ctx, client)
 		if err != nil {
-			return "", &LookupError{Tool: tool, Upstream: key, Err: err}
+			return "", newLookupError(tool, key, err)
 		}
 		return v, nil
 	}
@@ -92,7 +92,7 @@ func (c *Cache) Resolve(ctx context.Context, client *download.Client, tool strin
 	}
 	v, err := r.Latest(ctx, client)
 	if err != nil {
-		return "", &LookupError{Tool: tool, Upstream: key, Err: err}
+		return "", newLookupError(tool, key, err)
 	}
 	return v, c.put(key, v)
 }

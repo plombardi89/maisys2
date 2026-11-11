@@ -48,6 +48,27 @@ func (e *LookupError) Error() string {
 
 func (e *LookupError) Unwrap() error { return e.Err }
 
+// newLookupError returns the LookupError for a failed lookup of tool's
+// latest version from upstream, or from the upstream err names, if it
+// asked somewhere else.
+func newLookupError(tool, upstream string, err error) *LookupError {
+	if ue, ok := errors.AsType[*upstreamError](err); ok {
+		upstream = ue.upstream
+	}
+	return &LookupError{Tool: tool, Upstream: upstream, Err: err}
+}
+
+// upstreamError is a failed lookup that asked somewhere other than its
+// resolver's Upstream, such as go list for a Go module fetched directly.
+type upstreamError struct {
+	upstream string
+	err      error
+}
+
+func (e *upstreamError) Error() string { return e.err.Error() }
+
+func (e *upstreamError) Unwrap() error { return e.err }
+
 // checkVersion returns v if it's a well-formed exact version, which is safe
 // to put in file names and URLs.
 func checkVersion(v string) (string, error) {

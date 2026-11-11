@@ -46,17 +46,20 @@ type Program struct {
 	Version string
 	// Resolve returns the version "latest" means for the package, such as
 	// from the Go module proxy. It's needed when Version is "latest", and
-	// called once, by Check.
+	// called by Check, or by Apply if Check couldn't look it up.
 	Resolve func(ctx context.Context, pkg string) (string, error)
 	// Go is the go binary to run: the toolchain maisys manages. Empty
 	// means go from PATH. If the binary doesn't exist yet, as when the
 	// same sync installs the toolchain first, Check can't look at the
-	// installed program and plans to install it.
+	// installed program and plans to install it. If looking up "latest"
+	// fails then too, as it does when the lookup needs go, Apply looks it
+	// up once the toolchain is installed.
 	Go string
 	// Env is extra environment for go, as NAME=value.
 	Env []string
 
-	// version is the version to install, resolved by Check.
+	// version is the version to install, resolved by Check, or empty if
+	// Apply is to resolve it.
 	version string
 }
 
@@ -83,22 +86,31 @@ func (p *Program) Name() string {
 }
 
 // Check compares the version recorded in the installed binary with the
-// version wanted.
+// version wanted. A failed lookup of "latest" is an error, unless the go
+// binary doesn't exist yet: the lookup may need it, so the program is to
+// be installed at whatever version Apply finds.
 func (p *Program) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := p.validate(); err != nil {
 		return resource.Change{}, err
 	}
+	name, haveGo := p.Name(), p.haveGo()
+	p.version = ""
 	v, err := p.resolve(ctx)
 	if err != nil {
-		return resource.Change{}, err
+		if p.Version != Latest || haveGo {
+			return resource.Change{}, err
+		}
+		if rt.Log != nil {
+			_, _ = fmt.Fprintf(rt.Log, "go install %s: looking up the latest version once go is installed: %v\n", p.Package, err)
+		}
+		return resource.Change{Action: resource.Create, Summary: name + " (latest)"}, nil
 	}
 	p.version = v
 	wanted := v
 	if p.Version == Latest {
 		wanted += " (latest)"
 	}
-	name := p.Name()
-	if !p.haveGo() {
+	if !haveGo {
 		return resource.Change{Action: resource.Create, Summary: name + " " + wanted}, nil
 	}
 
