@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/plombardi89/maisys2/internal/resource"
 	"github.com/plombardi89/maisys2/internal/resource/file"
@@ -24,7 +26,10 @@ const Kind = "cleanup"
 
 // Leftover is a file or folder to delete if it's there. Its check reports
 // "- PATH" while it's there, and applying deletes it, with everything in
-// it.
+// it. A symlink at the path is deleted, not what it points to. But if a
+// folder the path is in is a symlink (one below the home folder, for a
+// path in it), the path is left in place with a note, so nothing is
+// deleted from wherever the symlink points, such as a dotfiles repo.
 type Leftover struct {
 	// Path is the file or folder: "~/..." in your home folder, or an
 	// absolute path.
@@ -32,7 +37,8 @@ type Leftover struct {
 	// Root deletes it as root, for a path outside your home folder.
 	Root bool
 	// SHA256, if it isn't empty, lists the sha256 sums in hex the file may
-	// have: a file with other contents, or a folder, is left alone.
+	// have: a file with other contents, a folder or a symlink is left
+	// alone.
 	SHA256 []string
 }
 
@@ -52,17 +58,14 @@ func (l *Leftover) Privileged() bool { return l.Root }
 
 // Check reports whether the leftover is there to delete.
 func (l *Leftover) Check(_ context.Context, rt *resource.Runtime) (resource.Change, error) {
-	_, there, err := l.inspect(rt)
-	if err != nil || !there {
-		return resource.Change{}, err
-	}
-	return resource.Change{Action: resource.Remove, Summary: file.Display(l.Path)}, nil
+	c, _, err := l.check(rt)
+	return c, err
 }
 
 // Apply deletes the leftover, if it's there.
 func (l *Leftover) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, error) {
-	path, there, err := l.inspect(rt)
-	if err != nil || !there {
+	c, path, err := l.check(rt)
+	if err != nil || c.Action != resource.Remove {
 		return state.Record{Paths: []string{file.Display(l.Path)}}, err
 	}
 	if l.Root {
@@ -76,30 +79,67 @@ func (l *Leftover) Apply(ctx context.Context, rt *resource.Runtime) (state.Recor
 	return state.Record{Paths: []string{file.Display(l.Path)}}, nil
 }
 
-// inspect returns the leftover's absolute path, and whether it's there to
-// delete.
-func (l *Leftover) inspect(rt *resource.Runtime) (string, bool, error) {
+// check returns what deleting the leftover does, and its absolute path.
+func (l *Leftover) check(rt *resource.Runtime) (resource.Change, string, error) {
+	display := file.Display(l.Path)
 	path, err := file.Expand(rt.Paths.Home, l.Path)
 	if err != nil {
-		return "", false, err
+		return resource.Change{}, "", err
 	}
 	info, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return path, false, nil
+		return resource.Change{}, path, nil
 	case err != nil:
-		return "", false, fmt.Errorf("reading %s: %w", file.Display(l.Path), err)
-	case len(l.SHA256) == 0:
-		return path, true, nil
-	case !info.Mode().IsRegular():
-		return path, false, nil
+		return resource.Change{}, "", fmt.Errorf("reading %s: %w", display, err)
 	}
-	data, err := os.ReadFile(path)
+	if len(l.SHA256) > 0 {
+		if !info.Mode().IsRegular() {
+			return resource.Change{}, path, nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return resource.Change{}, "", fmt.Errorf("reading %s: %w", display, err)
+		}
+		if sum := sha256.Sum256(data); !slices.Contains(l.SHA256, hex.EncodeToString(sum[:])) {
+			return resource.Change{}, path, nil
+		}
+	}
+	link, err := symlinkedFolder(rt.Paths.Home, path)
 	if err != nil {
-		return "", false, fmt.Errorf("reading %s: %w", file.Display(l.Path), err)
+		return resource.Change{}, "", fmt.Errorf("reading %s: %w", display, err)
 	}
-	sum := sha256.Sum256(data)
-	return path, slices.Contains(l.SHA256, hex.EncodeToString(sum[:])), nil
+	if link != "" {
+		note := fmt.Sprintf("%s is in %s, which is a symlink (left in place)", display, file.Short(rt.Paths.Home, link))
+		return resource.Change{Notes: []string{note}}, path, nil
+	}
+	return resource.Change{Action: resource.Remove, Summary: display}, path, nil
+}
+
+// symlinkedFolder returns the first of the folders path is in that's a
+// symlink, or "" if none is. It looks at those below home if path is in
+// it, and at those below the root otherwise.
+func symlinkedFolder(home, path string) (string, error) {
+	base := filepath.VolumeName(path) + string(filepath.Separator)
+	if rel, err := filepath.Rel(home, path); home != "" && err == nil && filepath.IsLocal(rel) {
+		base = home
+	}
+	rel, err := filepath.Rel(base, filepath.Dir(path))
+	if err != nil || rel == "." {
+		return "", err
+	}
+	dir := base
+	for name := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		dir = filepath.Join(dir, name)
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return dir, nil
+		}
+	}
+	return "", nil
 }
 
 // Remover handles the records of leftovers once they're taken out of the

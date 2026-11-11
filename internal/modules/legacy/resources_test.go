@@ -79,7 +79,13 @@ func TestResources(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
 			old := goRoot
-			goRoot = filepath.Join(t.TempDir(), "go")
+			// The cleanup checks the folders Go's folder is in for symlinks,
+			// from the root.
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			goRoot = filepath.Join(dir, "go")
 			t.Cleanup(func() { goRoot = old })
 			if tt.goRoot {
 				write(t, goRoot, "bin/go", "")
