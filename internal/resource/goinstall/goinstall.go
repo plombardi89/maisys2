@@ -2,10 +2,11 @@
 // the golang module's tools, at an exact version or the latest one.
 //
 // A program is compared with the module version recorded in the installed
-// binary (go version -m), and reinstalled only when the version wanted is
-// different, so a sync that changes nothing runs no go install. What
-// "latest" means comes from a resolver the module provides (the Go module
-// proxy, honouring GOPROXY and GOPRIVATE).
+// binary, which maisys reads itself, as go version -m does, and reinstalled
+// only when the version wanted is different, so a sync that changes
+// nothing runs no go install, and neither does one that upgrades the
+// toolchain. What "latest" means comes from a resolver the module provides
+// (the Go module proxy, honouring GOPROXY and GOPRIVATE).
 //
 // go runs with the user's environment, so GOPROXY, GOPRIVATE, GOBIN and
 // GOPATH are kept, plus GOTOOLCHAIN=local, so the toolchain maisys
@@ -15,13 +16,15 @@ package goinstall
 import (
 	"cmp"
 	"context"
+	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/plombardi89/maisys2/internal/resource"
@@ -50,10 +53,10 @@ type Program struct {
 	Resolve func(ctx context.Context, pkg string) (string, error)
 	// Go is the go binary to run: the toolchain maisys manages. Empty
 	// means go from PATH. If the binary doesn't exist yet, as when the
-	// same sync installs the toolchain first, Check can't look at the
-	// installed program and plans to install it. If looking up "latest"
-	// fails then too, as it does when the lookup needs go, Apply looks it
-	// up once the toolchain is installed.
+	// same sync installs or upgrades the toolchain first, Check finds the
+	// installed program without it. If looking up "latest" fails then
+	// too, as it does when the lookup needs go, Apply looks it up once the
+	// toolchain is installed.
 	Go string
 	// Env is extra environment for go, as NAME=value.
 	Env []string
@@ -86,18 +89,23 @@ func (p *Program) Name() string {
 }
 
 // Check compares the version recorded in the installed binary with the
-// version wanted. A failed lookup of "latest" is an error, unless the go
-// binary doesn't exist yet: the lookup may need it, so the program is to
-// be installed at whatever version Apply finds.
+// version wanted. go env says where the binary is. If the go binary
+// doesn't exist yet, as when the same sync upgrades the toolchain, it's
+// where go install puts programs by default: GOBIN, or the bin folder of
+// the first entry in GOPATH, from Env, or else ~/go/bin. So a program at
+// the version wanted isn't reinstalled with a new toolchain. A failed
+// lookup of "latest" is an error, unless the go binary doesn't exist yet:
+// the lookup may need it, so the program is to be installed at whatever
+// version Apply finds.
 func (p *Program) Check(ctx context.Context, rt *resource.Runtime) (resource.Change, error) {
 	if err := p.validate(); err != nil {
 		return resource.Change{}, err
 	}
-	name, haveGo := p.Name(), p.haveGo()
+	name := p.Name()
 	p.version = ""
 	v, err := p.resolve(ctx)
 	if err != nil {
-		if p.Version != Latest || haveGo {
+		if p.Version != Latest || p.haveGo() {
 			return resource.Change{}, err
 		}
 		if rt.Log != nil {
@@ -110,15 +118,12 @@ func (p *Program) Check(ctx context.Context, rt *resource.Runtime) (resource.Cha
 	if p.Version == Latest {
 		wanted += " (latest)"
 	}
-	if !haveGo {
-		return resource.Change{Action: resource.Create, Summary: name + " " + wanted}, nil
-	}
 
-	bin, err := binary(ctx, rt.Runner, p.goBinary(), p.Package, p.Env)
+	bin, err := p.installed(ctx, rt)
 	if err != nil {
 		return resource.Change{}, err
 	}
-	info, err := inspect(ctx, rt.Runner, p.goBinary(), bin, p.Env)
+	info, err := inspect(bin)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return resource.Change{Action: resource.Create, Summary: name + " " + wanted}, nil
@@ -175,6 +180,43 @@ func (p *Program) haveGo() bool {
 	}
 	_, err := os.Stat(p.Go)
 	return err == nil
+}
+
+// installed returns where go install puts the program: where go env says,
+// or, if the go binary doesn't exist yet, where it would by default (see
+// Check).
+func (p *Program) installed(ctx context.Context, rt *resource.Runtime) (string, error) {
+	if p.haveGo() {
+		return binary(ctx, rt.Runner, p.goBinary(), p.Package, p.Env)
+	}
+	dir := p.getenv("GOBIN")
+	if dir == "" {
+		gopath := filepath.SplitList(p.getenv("GOPATH"))
+		switch {
+		case len(gopath) > 0 && gopath[0] != "":
+			dir = filepath.Join(gopath[0], "bin")
+		case rt.Paths.Home != "":
+			dir = filepath.Join(rt.Paths.Home, "go", "bin")
+		default:
+			return "", errors.New("can't tell where go install puts programs: GOBIN, GOPATH and the home folder are all unknown")
+		}
+	}
+	name := execName(p.Package)
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// getenv returns the environment variable name from Env, whose last entry
+// for it wins, or "".
+func (p *Program) getenv(name string) string {
+	for _, kv := range slices.Backward(p.Env) {
+		if v, ok := strings.CutPrefix(kv, name+"="); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // Apply runs go install for the version wanted.
@@ -243,70 +285,34 @@ func binary(ctx context.Context, r system.Runner, goBin, pkg string, env []strin
 	return filepath.Join(dir, execName(pkg)+lines[2]), nil
 }
 
-// errNotGo means a file isn't a Go program go version -m can read.
+// errNotGo means a file isn't a Go program whose build information can be
+// read.
 var errNotGo = errors.New("not a Go program")
 
-// buildInfo is what go version -m found in a binary.
+// buildInfo is the build information read from a binary.
 type buildInfo struct {
 	// path is the main package's path.
 	path string
-	// module is the main module's path.
-	module string
 	// version is the main module's version, such as "v3.41.0" or
 	// "(devel)".
 	version string
 }
 
-// inspect reads the build information in bin. It fails with an error
-// wrapping fs.ErrNotExist if bin doesn't exist, and errNotGo if it isn't a
-// Go program.
-func inspect(ctx context.Context, r system.Runner, goBin, bin string, env []string) (buildInfo, error) {
+// inspect reads the build information in bin, as go version -m does. It
+// fails with an error wrapping fs.ErrNotExist if bin doesn't exist, and
+// errNotGo if it isn't a Go program.
+func inspect(bin string) (buildInfo, error) {
 	if _, err := os.Lstat(bin); err != nil {
 		return buildInfo{}, err
 	}
-	res, err := r.Run(ctx, system.Cmd{
-		Name:      goBin,
-		Args:      []string{"version", "-m", bin},
-		Dir:       os.TempDir(),
-		Env:       environ(env),
-		Label:     "go version -m",
-		AllowExit: []int{1},
-	})
-	if err != nil {
+	info, err := buildinfo.ReadFile(bin)
+	if _, ok := errors.AsType[*fs.PathError](err); ok {
 		return buildInfo{}, err
 	}
-	info := parseVersionM(string(res.Stdout))
-	if res.ExitCode != 0 || info.path == "" {
+	if err != nil || info.Path == "" {
 		return buildInfo{}, errNotGo
 	}
-	return info, nil
-}
-
-// parseVersionM reads the output of go version -m for one binary:
-//
-//	/home/u/go/bin/task: go1.26.1
-//		path	github.com/go-task/task/v3/cmd/task
-//		mod	github.com/go-task/task/v3	v3.41.0	h1:…
-//		dep	…
-//		build	…
-func parseVersionM(out string) buildInfo {
-	var info buildInfo
-	for line := range strings.Lines(out) {
-		fields := strings.Split(strings.TrimRight(line, "\r\n"), "\t")
-		if len(fields) < 3 || fields[0] != "" {
-			continue
-		}
-		switch fields[1] {
-		case "path":
-			info.path = fields[2]
-		case "mod":
-			info.module = fields[2]
-			if len(fields) > 3 {
-				info.version = fields[3]
-			}
-		}
-	}
-	return info
+	return buildInfo{path: info.Path, version: info.Main.Version}, nil
 }
 
 // execName returns the name go install gives the binary of package pkg.
@@ -340,8 +346,8 @@ func (Remover) Kind() string { return Kind }
 
 // CheckRemove checks whether the binary rec records is still there, and
 // still the program installed: something else is left in place.
-func (r Remover) CheckRemove(ctx context.Context, rt *resource.Runtime, rec state.Record) (resource.Change, error) {
-	bin, info, why, err := r.inspect(ctx, rt, rec)
+func (r Remover) CheckRemove(_ context.Context, rt *resource.Runtime, rec state.Record) (resource.Change, error) {
+	bin, info, why, err := r.inspect(rec)
 	switch {
 	case err != nil || bin == "":
 		return resource.Change{}, err
@@ -353,8 +359,8 @@ func (r Remover) CheckRemove(ctx context.Context, rt *resource.Runtime, rec stat
 
 // Remove deletes the binary rec records, if it's still the program
 // installed.
-func (r Remover) Remove(ctx context.Context, rt *resource.Runtime, rec state.Record) error {
-	bin, _, why, err := r.inspect(ctx, rt, rec)
+func (r Remover) Remove(_ context.Context, _ *resource.Runtime, rec state.Record) error {
+	bin, _, why, err := r.inspect(rec)
 	if err != nil || bin == "" || why != "" {
 		return err
 	}
@@ -365,25 +371,18 @@ func (r Remover) Remove(ctx context.Context, rt *resource.Runtime, rec state.Rec
 }
 
 // inspect returns the binary rec records and its build information, or ""
-// if it's gone. If it's no longer the program installed, or can't be
-// checked, why says so.
-func (Remover) inspect(ctx context.Context, rt *resource.Runtime, rec state.Record) (bin string, info buildInfo, why string, err error) {
+// if it's gone. If it's no longer the program installed, why says so.
+func (Remover) inspect(rec state.Record) (bin string, info buildInfo, why string, err error) {
 	if len(rec.Paths) == 0 {
 		return "", buildInfo{}, "", nil
 	}
 	bin = rec.Paths[0]
-	goBin := rec.Details["go"]
-	if _, err := os.Stat(goBin); goBin == "" || err != nil {
-		goBin = "go"
-	}
-	info, err = inspect(ctx, rt.Runner, goBin, bin, nil)
+	info, err = inspect(bin)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", buildInfo{}, "", nil
 	case errors.Is(err, errNotGo):
 		return bin, info, "isn't a Go program any more", nil
-	case errors.Is(err, exec.ErrNotFound):
-		return bin, info, "can't be checked without go", nil
 	case err != nil:
 		return "", info, "", err
 	case info.path != rec.Details["package"]:
