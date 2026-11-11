@@ -62,6 +62,55 @@ func TestFetch(t *testing.T) {
 	}
 }
 
+// TestFetchStaleParts checks that a download deletes the unfinished files
+// earlier downloads of the same file left behind, such as when maisys was
+// killed, but not those of a download that may still be running, or of
+// other files.
+func TestFetchStaleParts(t *testing.T) {
+	data := []byte("the tool's archive")
+	sum := sha(data)
+	s := newServer(t)
+	s.file("/tool.tar.gz", data)
+	c := newClient(t, s, nil)
+	base := sum[:16] + "-tool.tar.gz"
+	old := time.Now().Add(-48 * time.Hour)
+	files := []struct {
+		name string
+		old  bool
+		kept bool
+	}{
+		{name: "." + base + ".1234567.part", old: true},
+		{name: "." + base + ".7654321.part", kept: true},
+		{name: "." + sha([]byte("other"))[:16] + "-tool.tar.gz.1234567.part", old: true, kept: true},
+		{name: "." + base + ".tmp", old: true, kept: true},
+		{name: "." + base + ".part", old: true, kept: true},
+	}
+	for _, f := range files {
+		path := filepath.Join(c.Dir, f.name)
+		if err := os.WriteFile(path, []byte("half"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if f.old {
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if _, err := c.Fetch(t.Context(), Asset{URL: s.URL + "/tool.tar.gz", Name: "tool.tar.gz"}, sum); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		_, err := os.Stat(filepath.Join(c.Dir, f.name))
+		if kept := err == nil; kept != f.kept {
+			t.Errorf("after Fetch(), %s is there: %t, want %t", f.name, kept, f.kept)
+		}
+	}
+	if entries, _ := os.ReadDir(c.Dir); len(entries) != len(files) {
+		t.Errorf("the download cache holds %d files, want the download and the %d kept", len(entries), len(files)-1)
+	}
+}
+
 func TestFetchChecksumMismatch(t *testing.T) {
 	s := newServer(t)
 	s.file("/tool.tar.gz", []byte("tampered"))
