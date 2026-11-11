@@ -15,6 +15,13 @@ import (
 // command run as root, it fails with ErrNeedsPassword if no sudo session
 // is started and sudo needs a password.
 func InstallFile(ctx context.Context, r Runner, data []byte, dst string, mode fs.FileMode) error {
+	return InstallFileChecked(ctx, r, data, dst, mode, nil)
+}
+
+// InstallFileChecked is InstallFile, but first runs check, if it isn't
+// nil, on the temporary file that's put in place, such as visudo -cf for a
+// sudoers rule. If check fails, dst is left alone.
+func InstallFileChecked(ctx context.Context, r Runner, data []byte, dst string, mode fs.FileMode, check func(ctx context.Context, tmp string) error) error {
 	if !sudoSupported {
 		return errNoSudo
 	}
@@ -32,6 +39,11 @@ func InstallFile(ctx context.Context, r Runner, data []byte, dst string, mode fs
 	}
 	if err != nil {
 		return fmt.Errorf("couldn't write %s: %w", dst, err)
+	}
+	if check != nil {
+		if err := check(ctx, tmp.Name()); err != nil {
+			return fmt.Errorf("didn't write %s: %w", dst, err)
+		}
 	}
 
 	_, err = r.Run(ctx, Cmd{

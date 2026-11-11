@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -311,6 +312,7 @@ func (s *syncRun) planAndApply(sys *facts.System) error {
 		Log:      log,
 		Now:      s.g.now,
 		Shared:   map[any]any{tool.EnvKey{}: tools},
+		RepoFS:   os.DirFS(s.repo.dir),
 	})
 	if err != nil {
 		if ctx.Err() != nil {

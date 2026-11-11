@@ -48,9 +48,9 @@ func TestDetectLinuxDistributions(t *testing.T) {
 		{"fedora-43", System{OS: config.Fedora, OSID: "fedora", OSVersion: "43", PrettyName: "Fedora Linux 43 (WSL)"}},
 		{"fedora-44", System{OS: config.Fedora, OSID: "fedora", OSVersion: "44", PrettyName: "Fedora Linux 44 (Container Image)"}},
 		{"fedora-45", System{OS: config.Fedora, OSID: "fedora", OSVersion: "45", PrettyName: "Fedora Linux 45 (Workstation Edition)"}},
-		{"ubuntu-24.04", System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "24.04", PrettyName: "Ubuntu 24.04.3 LTS"}},
-		{"ubuntu-26.04", System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "26.04", PrettyName: "Ubuntu 26.04.1 LTS"}},
-		{"debian-13", System{OSID: "debian", OSVersion: "13", PrettyName: "Debian GNU/Linux 13 (trixie)"}},
+		{"ubuntu-24.04", System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "24.04", OSCodename: "noble", PrettyName: "Ubuntu 24.04.3 LTS"}},
+		{"ubuntu-26.04", System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "26.04", OSCodename: "resolute", PrettyName: "Ubuntu 26.04.1 LTS"}},
+		{"debian-13", System{OSID: "debian", OSVersion: "13", OSCodename: "trixie", PrettyName: "Debian GNU/Linux 13 (trixie)"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.fixture, func(t *testing.T) {

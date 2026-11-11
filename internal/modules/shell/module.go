@@ -36,40 +36,51 @@ type Config struct {
 	Bash Bash `toml:"bash"`
 	// Zsh configures zsh.
 	Zsh Zsh `toml:"zsh"`
-	// Fish configures fish, which loads maisys's environment from
-	// ~/.config/fish/conf.d, so its config.fish is never changed.
+	// Fish configures fish. maisys writes fish's variables, snippets and
+	// environment to ~/.config/fish/conf.d/maisys.fish, which fish loads by
+	// itself, so its config.fish is never changed.
 	Fish Fish `toml:"fish"`
 }
 
 // Settings are the settings every shell has.
 type Settings struct {
-	// Enabled installs the shell and writes its environment file.
+	// Enabled installs the shell and writes its environment file: PATH,
+	// variables and init steps of the modules the machine enables, with
+	// ~/.local/bin first on PATH.
 	Enabled bool `toml:"enabled"`
-	// Variables are set before anything else is loaded, so they can
-	// configure what comes after, such as oh-my-zsh.
+	// Variables are exported before anything else is loaded, so they can
+	// configure what comes after, such as oh-my-zsh. A value can start
+	// with ~/ for your home folder and refer to other variables as $NAME;
+	// everything else is taken literally.
 	Variables map[string]string `toml:"variables"`
 	// PreSnippets are files in the config repo, in the shell's own syntax,
 	// that are sourced after variables and before oh-my-zsh and maisys's
-	// environment.
+	// environment. They're copied to ~/.config/maisys/shell/<shell>/ and
+	// sourced from there.
 	PreSnippets []string `toml:"pre_snippets" merge:"union"`
 	// Snippets are files in the config repo, in the shell's own syntax,
-	// that are sourced after everything else.
+	// that are sourced after everything else. They're copied to
+	// ~/.config/maisys/shell/<shell>/ and sourced from there.
 	Snippets []string `toml:"snippets" merge:"union"`
 }
 
 // Bash is the bash config.
 type Bash struct {
 	Settings
-	// ManageRC lets maisys write ~/.bashrc. Set it to false to keep your
-	// own, and source ~/.config/maisys/shell/env.sh from it.
+	// ManageRC lets maisys write ~/.bashrc, which then sources
+	// ~/secrets.sh last if it exists. Set it to false to keep your own, and
+	// source ~/.config/maisys/shell/env.sh from it: that file then sets the
+	// variables and sources the snippets too.
 	ManageRC bool `toml:"manage_rc"`
 }
 
 // Zsh is the zsh config.
 type Zsh struct {
 	Settings
-	// ManageRC lets maisys write ~/.zshrc. Set it to false to keep your
-	// own, and source ~/.config/maisys/shell/env.zsh from it.
+	// ManageRC lets maisys write ~/.zshrc, which then sources ~/secrets.sh
+	// last if it exists. Set it to false to keep your own, and source
+	// ~/.config/maisys/shell/env.zsh from it: that file then sets the
+	// variables, sources the snippets and loads oh-my-zsh too.
 	ManageRC bool `toml:"manage_rc"`
 	// OhMyZsh configures oh-my-zsh.
 	OhMyZsh OhMyZsh `toml:"oh_my_zsh"`
@@ -82,17 +93,20 @@ type Fish struct {
 
 // OhMyZsh is the oh-my-zsh config.
 type OhMyZsh struct {
-	// Enabled installs oh-my-zsh, with its own updater turned off, and
-	// loads it from ~/.zshrc.
+	// Enabled installs oh-my-zsh in ~/.oh-my-zsh, with its own updater
+	// turned off, and loads it from ~/.zshrc. Custom themes and plugins go
+	// in its custom folder.
 	Enabled bool `toml:"enabled"`
 	// Ref is the oh-my-zsh branch, tag or commit to check out. A branch is
 	// updated on every sync.
 	Ref string `toml:"ref"`
 	// Theme is the theme to use: one oh-my-zsh includes, or one from
-	// custom_themes.
+	// custom_themes. Themes oh-my-zsh includes are checked once it's
+	// checked out.
 	Theme string `toml:"theme"`
 	// Plugins lists the plugins to load: ones oh-my-zsh includes, or ones
-	// from custom_plugins.
+	// from custom_plugins. Plugins oh-my-zsh includes are checked once it's
+	// checked out.
 	Plugins []string `toml:"plugins" merge:"union"`
 	// CustomThemes are themes from other git repos, by theme name.
 	CustomThemes map[string]CustomTheme `toml:"custom_themes"`
@@ -108,6 +122,7 @@ type CustomTheme struct {
 	// on every sync.
 	Ref string `toml:"ref"`
 	// File is the theme file in the repo, such as "aphrodite.zsh-theme".
+	// The theme's <name>.zsh-theme links to it.
 	File string `toml:"file"`
 }
 
