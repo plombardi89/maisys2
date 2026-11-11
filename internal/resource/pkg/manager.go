@@ -192,11 +192,26 @@ func (m *Manager) wants(name string) bool {
 	return slices.Contains(m.wanted, name)
 }
 
+// checkName checks that name is a package name maisys accepts. apt reads
+// a "-" at the end of a name it doesn't know as "remove this package", so
+// a typo such as "openssh-server-" would remove openssh-server: on Ubuntu,
+// such names are rejected. A "+" at the end means "install", which is
+// harmless, and real packages such as "g++" end with one.
+func (m *Manager) checkName(name string) error {
+	if !validName.MatchString(name) {
+		return fmt.Errorf("%q isn't a valid package name", name)
+	}
+	if _, ok := m.backend.(apt); ok && strings.HasSuffix(name, "-") {
+		return fmt.Errorf("%q isn't a valid package name: a \"-\" at the end tells apt to remove %s", name, strings.TrimSuffix(name, "-"))
+	}
+	return nil
+}
+
 // lookup looks name up, together with every wanted name that hasn't been
 // looked up yet. Each name is looked up once.
 func (m *Manager) lookup(ctx context.Context, name string) (info, error) {
-	if !validName.MatchString(name) {
-		return info{}, fmt.Errorf("%q isn't a valid package name", name)
+	if err := m.checkName(name); err != nil {
+		return info{}, err
 	}
 	m.lookupMu.Lock()
 	defer m.lookupMu.Unlock()
@@ -206,7 +221,7 @@ func (m *Manager) lookup(ctx context.Context, name string) (info, error) {
 	names := []string{name}
 	m.mu.Lock()
 	for _, n := range m.wanted {
-		if _, ok := m.found[n]; !ok && n != name && validName.MatchString(n) {
+		if _, ok := m.found[n]; !ok && n != name && m.checkName(n) == nil {
 			names = append(names, n)
 		}
 	}

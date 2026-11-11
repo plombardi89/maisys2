@@ -92,13 +92,15 @@ func (apt) query(ctx context.Context, m *Manager, names []string) (map[string]in
 }
 
 // install installs and upgrades packages with one apt-get install, which
-// upgrades installed packages to the version the repos have.
+// upgrades installed packages to the version the repos have. With
+// --no-remove, apt fails rather than remove any package, as dnf does
+// without --allowerasing: maisys never removes packages.
 func (apt) install(ctx context.Context, m *Manager, install, upgrade []string) error {
 	names := append(append([]string(nil), install...), upgrade...)
 	if len(names) == 0 {
 		return nil
 	}
-	args := []string{"install", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"}
+	args := []string{"install", "-y", "--no-remove", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"}
 	_, err := m.Run(ctx, system.Cmd{
 		Name:  "apt-get",
 		Args:  append(args, names...),

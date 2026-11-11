@@ -443,6 +443,24 @@ func TestCheckErrors(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a name apt reads as a removal", func(t *testing.T) {
+		// Stale lists and sudo with a password: names the lists lack are
+		// checked only when they're installed.
+		s := newTestSystem(t, config.Ubuntu)
+		s.lists(3 * time.Hour)
+		s.runner.SudoStatus = system.SudoNeedsPassword
+		s.fakeApt(nil, map[string]string{"g++": "4:13.2.0-7ubuntu1", "jq": "1.7.1-3build1"})
+		rs := Set(s.rt, "packages", []string{"openssh-server-", "g++", "jq"})
+		changes, errs := s.check(rs)
+		want := []resource.Change{{}, {Action: resource.Create, Summary: "install g++"}, {Action: resource.Create, Summary: "install jq"}}
+		wantErrs := []string{`"openssh-server-" isn't a valid package name: a "-" at the end tells apt to remove openssh-server`, "", ""}
+		wantResults(t, rs, changes, errs, want, wantErrs)
+		for _, c := range s.commands() {
+			if strings.Contains(c, "openssh-server") {
+				t.Errorf("ran %s, want the invalid name left out", c)
+			}
+		}
+	})
 	t.Run("another OS", func(t *testing.T) {
 		rt := &resource.Runtime{Runner: systemtest.NewFakeRunner(t), Facts: &facts.System{OSID: "debian"}}
 		rs := Set(rt, "packages", []string{"jq"})

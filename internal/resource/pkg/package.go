@@ -22,7 +22,8 @@ const (
 )
 
 // validName matches the package names maisys accepts: apt's and dnf's,
-// perhaps with an architecture, such as "libc6:i386" or "glibc.i686".
+// perhaps with an architecture, such as "libc6:i386" or "glibc.i686". On
+// Ubuntu, names that end with "-" are rejected too (see Manager.checkName).
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+:~-]*$`)
 
 // Package is a package a module installs and keeps at its latest version.

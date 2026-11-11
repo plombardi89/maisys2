@@ -527,7 +527,7 @@ func TestSyncFirstRunInstallsGit(t *testing.T) {
 			system:  &facts.System{OS: config.Ubuntu, OSID: "ubuntu", OSVersion: "26.04", PrettyName: "Ubuntu 26.04 LTS", Arch: config.AMD64, RawArch: "amd64"},
 			machine: "phil-workp14s",
 			pkg:     "git",
-			install: "apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold git",
+			install: "apt-get install -y --no-remove -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold git",
 		},
 	}
 	for _, tt := range tests {

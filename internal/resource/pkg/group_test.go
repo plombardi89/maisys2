@@ -139,7 +139,7 @@ func outcomes(members []resource.Member, out []resource.Outcome) []string {
 }
 
 const (
-	aptInstall = "apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+	aptInstall = "apt-get install -y --no-remove -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
 	// brokenCompose is how apt-get install fails for a package whose
 	// dependencies can't be installed.
 	brokenCompose = `Reading package lists...
