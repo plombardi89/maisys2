@@ -170,8 +170,9 @@ func BinDir(home string) string {
 // ~/.local/share/maisys/tools/<name>/<version>/, writes the Marker last,
 // then points the tool's commands in ~/.local/bin at it, replacing each
 // symlink in one step. A version counts as installed only once its marker
-// exists and every command points at it. Once the commands point at a new
-// version, the tool's other versions are deleted.
+// exists, its folder has every command's file, and every command points at
+// it. Once the commands point at a new version, the tool's other versions
+// are deleted.
 //
 // A file at a command's path that isn't a symlink into the tool's folder
 // is backed up to <path>.maisys-bak.<time> before it's replaced.
@@ -337,12 +338,13 @@ func (t *Tool) checksum(ctx context.Context, rt *resource.Runtime, v string) (do
 
 // status is what's installed, compared with the version wanted.
 type status struct {
-	// complete reports whether the wanted version's marker exists.
+	// complete reports whether the wanted version is installed (see
+	// Tool.complete).
 	complete bool
 	// linked reports whether every command points at the wanted version.
 	linked bool
 	// current is the version every command points at, if they all point
-	// at the same complete one.
+	// at the same one, and it has its marker.
 	current string
 	// foreign are the commands' paths that hold something other than a
 	// symlink into the tool's folder.
@@ -354,7 +356,7 @@ type status struct {
 
 // inspect finds what's installed.
 func (t *Tool) inspect(want string) status {
-	st := status{complete: complete(t.versionDir(want)), linked: true}
+	st := status{complete: t.complete(want), linked: true}
 	// exact maps each version a command points into to whether every
 	// such command points at its own file in it.
 	exact := map[string]bool{}
@@ -381,7 +383,7 @@ func (t *Tool) inspect(want string) status {
 	}
 	if len(exact) == 1 {
 		for v, ok := range exact {
-			if ok && complete(t.versionDir(v)) {
+			if ok && hasMarker(t.versionDir(v)) {
 				st.current = v
 			}
 		}
@@ -418,8 +420,24 @@ func inside(path, dir string) (string, bool) {
 	return rel, true
 }
 
-// complete reports whether the version folder dir has its marker.
-func complete(dir string) bool {
+// complete reports whether version v is installed: its folder has its
+// marker, and every command's file. A version an earlier maisys installed
+// with a different spec for the tool, such as another Strip, may lack
+// them, and is then installed again.
+func (t *Tool) complete(v string) bool {
+	if !hasMarker(t.versionDir(v)) {
+		return false
+	}
+	for _, l := range t.Spec.Links {
+		if _, err := os.Stat(t.linkTarget(l, v)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// hasMarker reports whether the version folder dir has its marker.
+func hasMarker(dir string) bool {
 	info, err := os.Lstat(filepath.Join(dir, Marker))
 	return err == nil && info.Mode().IsRegular()
 }
@@ -447,7 +465,7 @@ func (t *Tool) Apply(ctx context.Context, rt *resource.Runtime) (state.Record, e
 			return state.Record{}, err
 		}
 	}
-	if !complete(t.versionDir(t.want)) {
+	if !t.complete(t.want) {
 		if err := t.install(ctx, rt); err != nil {
 			return state.Record{}, err
 		}
@@ -484,7 +502,8 @@ func (t *Tool) install(ctx context.Context, rt *resource.Runtime) error {
 	}
 
 	dir := t.versionDir(v)
-	// A folder without its marker is an unfinished install.
+	// A folder that isn't complete is an unfinished install, or one made
+	// with an earlier spec.
 	if err := download.RemoveAll(dir); err != nil {
 		return fmt.Errorf("deleting the unfinished install of %s %s: %w", t.Spec.Name, v, err)
 	}

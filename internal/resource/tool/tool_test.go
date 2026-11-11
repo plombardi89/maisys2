@@ -399,6 +399,60 @@ func TestInterruptedInstall(t *testing.T) {
 	wantChange(t, m.check(m.tool(u, "1.0.0")), resource.NoChange, "")
 }
 
+func TestVersionMissingCommands(t *testing.T) {
+	needSymlinks(t)
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, m *machine, u *upstream)
+	}{
+		{
+			// A later maisys fixes the tool's spec, as when an archive's
+			// folder is stripped differently: the version an earlier one
+			// installed has its marker, but not the files the commands
+			// now run.
+			name: "installed with an earlier spec",
+			setup: func(t *testing.T, m *machine, u *upstream) {
+				t.Helper()
+				old := m.tool(u, "1.0.0")
+				old.Spec.Archive.Strip = 0
+				old.Spec.Links = []Link{{Name: "fake", Target: "fake-1.0.0/bin/fake"}, {Name: "fakectl", Target: "fake-1.0.0/bin/fakectl"}}
+				m.sync(old)
+			},
+		},
+		{
+			name: "a command's file deleted",
+			setup: func(t *testing.T, m *machine, u *upstream) {
+				t.Helper()
+				m.sync(m.tool(u, "1.0.0"))
+				if err := os.Remove(m.toolPath("1.0.0/bin/fakectl")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := newUpstream(t, "1.0.0")
+			m := newMachine(t, u)
+			tt.setup(t, m, u)
+
+			wantChange(t, m.sync(m.tool(u, "1.0.0")), resource.Create, "fake 1.0.0")
+			for _, cmd := range []string{"fake", "fakectl"} {
+				if got, want := m.read(".local/bin/"+cmd), "bin/"+cmd+" 1.0.0 x86_64"; got != want {
+					t.Errorf("~/.local/bin/%s runs %q, want %q", cmd, got, want)
+				}
+			}
+			if got := m.entries(".local/share/maisys/tools/fake/1.0.0"); strings.Join(got, " ") != Marker+" bin" {
+				t.Errorf("1.0.0's folder holds %q, want a fresh install", got)
+			}
+			if n := u.count(u.archive("1.0.0")); n != 2 {
+				t.Errorf("downloaded 1.0.0 %d times, want twice", n)
+			}
+			wantChange(t, m.check(m.tool(u, "1.0.0")), resource.NoChange, "")
+		})
+	}
+}
+
 func TestInterruptedSwitch(t *testing.T) {
 	needSymlinks(t)
 	u := newUpstream(t, "1.0.0", "1.1.0")
