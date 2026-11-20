@@ -1,0 +1,29 @@
+# Base workstation config; this directory becomes ~/.config/mise via --adopt.
+[vars]
+email = "fedora44@example.invalid"
+
+[bootstrap.user]
+login_shell = "/bin/zsh"
+
+[bootstrap.mise_shell_activate]
+bash = true
+zsh = true
+fish = "auto"
+
+[bootstrap.repos]
+"~/.local/share/oh-my-zsh" = { url = "https://github.com/ohmyzsh/ohmyzsh.git", ref = "master", depth = 1 }
+"~/.local/share/zsh-custom/themes/aphrodite" = { url = "https://github.com/win0err/aphrodite-terminal-theme.git", ref = "master", depth = 1 }
+"~/.local/share/zsh-custom/plugins/zsh-autosuggestions" = { url = "https://github.com/zsh-users/zsh-autosuggestions.git", ref = "v0.7.1", depth = 1 }
+"~/.local/share/zsh-custom/plugins/zsh-syntax-highlighting" = { url = "https://github.com/zsh-users/zsh-syntax-highlighting.git", ref = "master", depth = 1 }
+
+[dotfiles]
+"~/.gitconfig" = { source = "files/gitconfig.tera", mode = "template" }
+"~/.ssh/config" = { source = "files/ssh_config", mode = "copy", permissions = "0600" }
+"~/.zshrc/workstation" = { block = '''
+export ZSH="$HOME/.local/share/oh-my-zsh"
+export ZSH_CUSTOM="$HOME/.local/share/zsh-custom"
+ZSH_THEME="aphrodite/aphrodite"
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting)
+zstyle ':omz:update' mode disabled
+source "$ZSH/oh-my-zsh.sh"
+''' }

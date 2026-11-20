@@ -1,0 +1,13 @@
+[bootstrap.packages]
+"dnf:fish" = "latest"
+"dnf:git" = "latest"
+"dnf:gnupg2" = "latest"
+"dnf:htop" = "latest"
+"dnf:jq" = "latest"
+"dnf:netcat" = "latest"
+"dnf:socat" = "latest"
+"dnf:tmux" = "latest"
+"dnf:unzip" = "latest"
+"dnf:util-linux" = "latest" # owns chsh on Fedora 44
+"dnf:zip" = "latest"
+"dnf:zsh" = "latest"

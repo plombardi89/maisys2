@@ -1,0 +1,19 @@
+# Optional Fedora 44 experiment. The release RPMs install the vendor's repo
+# definitions and update them normally through DNF. unrar is a small probe.
+[bootstrap.hooks]
+pre-packages = '''
+set -eu
+test "$(rpm -E %fedora)" = 44
+if ! rpm -q rpmfusion-free-release rpmfusion-nonfree-release >/dev/null; then
+  sudo dnf -y install distribution-gpg-keys
+  for repo in free nonfree; do
+    sudo rpmkeys --import "/usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-$repo-fedora-44"
+  done
+  sudo dnf -y --setopt=localpkg_gpgcheck=1 install \
+    https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-44.noarch.rpm \
+    https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-44.noarch.rpm
+fi
+'''
+
+[bootstrap.packages]
+"dnf:unrar" = "latest"
