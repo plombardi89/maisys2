@@ -1,0 +1,8 @@
+# A key-only cloud account cannot answer Fedora's chsh password prompt.
+[bootstrap.hooks]
+pre-user = '''
+user=$(id -un)
+if [ "$(getent passwd "$user" | cut -d: -f7)" != /bin/zsh ]; then
+  sudo -n chsh -s /bin/zsh "$user"
+fi
+'''

@@ -1,0 +1,6 @@
+[tools]
+go = "1.26.4"
+golangci-lint = "2.15.0"
+kubectl = "1.35.0"
+uv = "0.12.10"
+"pypi:codespell" = "2.4.1"

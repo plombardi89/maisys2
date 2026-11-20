@@ -5,6 +5,8 @@ maisys sets up and maintains development machines from a config repo that you ke
 > [!NOTE]
 > maisys is in early development. It can create, check and sync a config repo, and `maisys sync` plans and applies changes, but no module installs anything yet. The design is in [#1](https://github.com/plombardi89/maisys2/issues/1).
 
+The [mise provisioning proposal](docs/design/mise-provisioning.md) describes one-command bootstrap for native Linux and Windows + WSL. Its [Fedora 44 spike](docs/spikes/fedora44-mise/README.md) includes the config and results from real VM installs.
+
 ## Installing
 
 On Linux (amd64 or arm64):
